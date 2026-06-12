@@ -1,0 +1,3 @@
+/home/naukarji/Vanta/VantaApp/modules/vanta-bridge/android/.cxx/Debug/6c133w6c/arm64-v8a/CMakeFiles/vanta.dir
+/home/naukarji/Vanta/VantaApp/modules/vanta-bridge/android/.cxx/Debug/6c133w6c/arm64-v8a/CMakeFiles/edit_cache.dir
+/home/naukarji/Vanta/VantaApp/modules/vanta-bridge/android/.cxx/Debug/6c133w6c/arm64-v8a/CMakeFiles/rebuild_cache.dir

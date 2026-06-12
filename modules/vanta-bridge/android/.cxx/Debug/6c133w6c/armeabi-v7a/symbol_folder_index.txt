@@ -1,0 +1,1 @@
+/home/naukarji/Vanta/VantaApp/modules/vanta-bridge/android/build/intermediates/cxx/Debug/6c133w6c/obj/armeabi-v7a

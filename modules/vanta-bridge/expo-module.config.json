@@ -1,0 +1,9 @@
+{
+  "platforms": ["apple", "android"],
+  "apple": {
+    "modules": ["VantaEngineModule"]
+  },
+  "android": {
+    "modules": ["expo.modules.vantaengine.VantaEngineModule"]
+  }
+}

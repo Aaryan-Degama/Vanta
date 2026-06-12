@@ -1,0 +1,38 @@
+{
+  "buildFiles": [
+    "/home/naukarji/Vanta/VantaApp/modules/vanta-bridge/android/src/main/cpp/CMakeLists.txt"
+  ],
+  "cleanCommandsComponents": [
+    [
+      "/home/naukarji/Android/Sdk/cmake/3.22.1/bin/ninja",
+      "-C",
+      "/home/naukarji/Vanta/VantaApp/modules/vanta-bridge/android/.cxx/Debug/6c133w6c/x86",
+      "clean"
+    ]
+  ],
+  "buildTargetsCommandComponents": [
+    "/home/naukarji/Android/Sdk/cmake/3.22.1/bin/ninja",
+    "-C",
+    "/home/naukarji/Vanta/VantaApp/modules/vanta-bridge/android/.cxx/Debug/6c133w6c/x86",
+    "{LIST_OF_TARGETS_TO_BUILD}"
+  ],
+  "libraries": {
+    "vanta::@6890427a1f51a3e7e1df": {
+      "toolchain": "toolchain",
+      "abi": "x86",
+      "artifactName": "vanta",
+      "output": "/home/naukarji/Vanta/VantaApp/modules/vanta-bridge/android/build/intermediates/cxx/Debug/6c133w6c/obj/x86/libvanta.so",
+      "runtimeFiles": []
+    }
+  },
+  "toolchains": {
+    "toolchain": {
+      "cCompilerExecutable": "/home/naukarji/Android/Sdk/ndk/27.0.12077973/toolchains/llvm/prebuilt/linux-x86_64/bin/clang.lld",
+      "cppCompilerExecutable": "/home/naukarji/Android/Sdk/ndk/27.0.12077973/toolchains/llvm/prebuilt/linux-x86_64/bin/clang++.lld"
+    }
+  },
+  "cFileExtensions": [],
+  "cppFileExtensions": [
+    "cpp"
+  ]
+}
