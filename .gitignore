@@ -37,13 +37,27 @@ yarn-error.*
 *.tsbuildinfo
 
 # generated native folders
-/ios
-/android
+vanta_app/ios
+vanta_app/android
+vanta_app/modules/vanta-bridge/android/.cxx
+vanta_app/modules/vanta-bridge/android/build
+vanta_app/modules/vanta-bridge/.idea
 
 # data
-# Maine to farewell ki pic use ki hai 7GB hai isliye upload nai kar ra
 **/data 
 
 
 # Model
 **/.onnx_model/
+modules/vanta-bridge/.idea/deviceManager.xml
+modules/vanta-bridge/.idea/discord.xml
+modules/vanta-bridge/.idea/misc.xml
+modules/vanta-bridge/.idea/modules.xml
+modules/vanta-bridge/.idea/vanta-bridge.iml
+modules/vanta-bridge/.idea/vcs.xml
+modules/vanta-bridge/.idea/caches/deviceStreaming.xml
+modules/vanta-bridge/android/.cxx/tools/debug/arm64-v8a/compile_commands.json
+modules/vanta-bridge/android/.cxx/tools/debug/armeabi-v7a/compile_commands.json
+modules/vanta-bridge/android/.cxx/tools/debug/x86/compile_commands.json
+modules/vanta-bridge/android/.cxx/tools/debug/x86_64/compile_commands.json
+

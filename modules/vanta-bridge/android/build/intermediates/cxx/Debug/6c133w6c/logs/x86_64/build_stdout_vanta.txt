@@ -1,2 +1,0 @@
-ninja: Entering directory `/home/naukarji/Vanta/VantaApp/modules/vanta-bridge/android/.cxx/Debug/6c133w6c/x86_64'
-ninja: no work to do.
