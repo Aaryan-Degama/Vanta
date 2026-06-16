@@ -39,3 +39,11 @@ yarn-error.*
 # generated native folders
 /ios
 /android
+
+# data
+# Maine to farewell ki pic use ki hai 7GB hai isliye upload nai kar ra
+**/data 
+
+
+# Model
+**/.onnx_model/
