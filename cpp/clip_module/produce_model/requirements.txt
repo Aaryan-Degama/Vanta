@@ -1,0 +1,14 @@
+# PyTorch Core
+torch>=2.0.0
+torchvision
+
+# OpenAI CLIP and its dependencies
+ftfy
+regex
+tqdm
+git+https://github.com/openai/CLIP.git
+
+# ONNX and Optimization Tools
+onnx>=1.14.0
+onnxconverter-common>=1.13.0
+onnxruntime>=1.14.0
