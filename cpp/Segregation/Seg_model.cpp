@@ -25,28 +25,24 @@ bool Face_embedding::load(const std::string& detector_path, const std::string& e
         - Prints status messages to stdout/stderr during loading
     */
 
-    if (d_loaded) {
-        std::cout << "Detector already loaded.\n";
-    } else {
+    if (!d_loaded) {
         try {
+            // :: To be removed ::
             std::cout << "Loading Detector of Buffalo_sc Model ...\n";
             detector_session = std::make_unique<Ort::Session>(shared_env, detector_path.c_str(), session_options_d);
             d_loaded = true;
-        } catch (const std::exception& e) {
-            std::cerr << "Error loading ONNX detector: " << e.what() << std::endl;
+        } catch {
             return false;
         }
     }    
     
-    if (e_loaded) {
-        std::cout << "Extractor already loaded.\n";
-    } else {
+    if (!e_loaded) {
         try {
+            // :: To be removed ::
             std::cout << "Loading Extractor of Buffalo_sc Model ...\n";
             extractor_session = std::make_unique<Ort::Session>(shared_env, extractor_path.c_str(), session_options_e);
             e_loaded = true;
-        } catch (const std::exception& e) {
-            std::cerr << "Error loading ONNX extractor: " << e.what() << std::endl;
+        } catch {
             return false;
         }        
     }
@@ -77,7 +73,10 @@ bool Face_embedding::unload() {
     if (e_loaded) extractor_session.reset();
     d_loaded = false;
     e_loaded = false;
+
+    // :: To be removed ::
     std::cout << "Models unloaded.\n";
+    
     return true;
 }
 

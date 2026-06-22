@@ -7,3 +7,11 @@ export function helloFromKotlin(): string {
 export function helloFromCpp(): string {
   return VantaEngineModule.helloFromCpp();
 }
+
+export async function startStoring(): Promise<any> {
+  return await VantaEngineModule.startStoring();
+}
+
+export async function getStoredFiles(): Promise<any[]> {
+  return await VantaEngineModule.getStoredFiles();
+}
