@@ -26,17 +26,17 @@ add_library(vanta SHARED
         ${DB_CODE}
         
         # CLIP 
-        ${CLIP_SOURCES}
+        #${CLIP_SOURCES}
 
         # Segregation
-        ${SEGEREGATION_SOURCES}
+        #${SEGEREGATION_SOURCES}
 
         # Graph 
-        ${GRAPH_SOURCES}
+        #${GRAPH_SOURCES}
 
         # SQLITE & SQLITE-VEC 
-        sqlite/sqlite3.c
-        sqlite_vec/sqlite-vec.c
+        ${CMAKE_CURRENT_SOURCE_DIR}/thirdparty/sqlite/sqlite3.c
+        ${CMAKE_CURRENT_SOURCE_DIR}/thirdparty/sqlite_vec/sqlite-vec.c
 )
 
 # 2. NOW apply compile definitions to the 'vanta' target
@@ -47,8 +47,8 @@ target_compile_definitions(vanta PRIVATE
 
 # 3. Include directories
 target_include_directories(vanta PRIVATE
-        ${CMAKE_CURRENT_SOURCE_DIR}/sqlite
-        ${CMAKE_CURRENT_SOURCE_DIR}/sqlite_vec
+        ${CMAKE_CURRENT_SOURCE_DIR}/thirdparty/sqlite
+        ${CMAKE_CURRENT_SOURCE_DIR}/thirdparty/sqlite_vec
         ${CMAKE_CURRENT_SOURCE_DIR}/DB
         ${CMAKE_CURRENT_SOURCE_DIR}/Include
 )
