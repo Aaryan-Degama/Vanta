@@ -29,6 +29,13 @@ class VantaEngineModule : Module() {
         files: Array<FileMeta>
     ): Boolean
 
+    // Native JNI function implemented in C++.
+    // Reads stored file records from SQLite and returns them
+    // as an array of HashMaps.
+    private external fun getStoredFilesNative(
+        dbPath: String
+    ): Array<HashMap<String, Any>>
+
     override fun definition() = ModuleDefinition {
 
         // Name exposed to JavaScript.
@@ -144,7 +151,7 @@ class VantaEngineModule : Module() {
             )
         }
 
-        // Debug helper that reads records back from SQLite.
+        // Debug helper that reads records back from SQLite via C++.
         // Useful for verifying that native insertion worked correctly.
         AsyncFunction("getStoredFiles") {
 
@@ -157,44 +164,11 @@ class VantaEngineModule : Module() {
             if (!dbFile.exists())
                 return@AsyncFunction emptyList<Map<String, Any>>()
 
-            // Stores rows that will be returned to JavaScript.
-            val results = mutableListOf<Map<String, Any>>()
+            // Delegate entirely to native C++ for reading.
+            val nativeResults = getStoredFilesNative(dbFile.absolutePath)
 
-            // Open SQLite database in read-only mode.
-            android.database.sqlite.SQLiteDatabase.openDatabase(
-                dbFile.absolutePath,
-                null,
-                android.database.sqlite.SQLiteDatabase.OPEN_READONLY
-            ).use { db ->
-
-                // Read a small sample of indexed files.
-                db.rawQuery(
-                    """
-                    SELECT content_uri, filetype, mime_type, size_bytes
-                    FROM files
-                    LIMIT 100
-                    """.trimIndent(),
-                    null
-                ).use { cursor ->
-
-                    // Iterate through every returned row.
-                    while (cursor.moveToNext()) {
-
-                        // Convert SQLite row into a JS-friendly map.
-                        results.add(
-                            mapOf(
-                                "uri" to cursor.getString(0),
-                                "type" to cursor.getString(1),
-                                "mime" to cursor.getString(2),
-                                "size" to cursor.getLong(3)
-                            )
-                        )
-                    }
-                }
-            }
-
-            // Returned directly to React Native.
-            results
+            // Convert Array<HashMap> to List<Map> for React Native.
+            nativeResults.toList()
         }
     }
 }

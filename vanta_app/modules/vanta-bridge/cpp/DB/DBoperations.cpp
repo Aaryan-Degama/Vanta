@@ -111,3 +111,100 @@ bool insert_files(const std::vector<file_meta>& files, const std::string& db_pat
     sqlite3_close(db);
     return true;
 }
+
+std::vector<file_meta> get_files(const std::string& db_path, int limit)
+{
+    std::vector<file_meta> results;
+
+    sqlite3* db = nullptr;
+    if (sqlite3_open_v2(db_path.c_str(), &db, SQLITE_OPEN_READONLY, nullptr) != SQLITE_OK)
+    {
+        LOGE("Failed to open DB for reading: %s", sqlite3_errmsg(db));
+        sqlite3_close(db);
+        return results;
+    }
+
+    sqlite3_stmt* stmt = nullptr;
+    const char* sql = R"(
+        SELECT content_uri, filetype, mime_type, size_bytes, mtime_unix,
+               last_indexed_at, width_px, height_px, duration_ms, status, retry_count
+        FROM files
+        LIMIT ?;
+    )";
+
+    if (sqlite3_prepare_v2(db, sql, -1, &stmt, nullptr) != SQLITE_OK)
+    {
+        LOGE("Prepare failed for get_files: %s", sqlite3_errmsg(db));
+        sqlite3_close(db);
+        return results;
+    }
+
+    sqlite3_bind_int(stmt, 1, limit);
+
+    while (sqlite3_step(stmt) == SQLITE_ROW)
+    {
+        file_meta meta;
+
+        const char* uri = reinterpret_cast<const char*>(sqlite3_column_text(stmt, 0));
+        meta.content_uri = uri ? uri : "";
+
+        const char* ftype = reinterpret_cast<const char*>(sqlite3_column_text(stmt, 1));
+        meta.file_type = ftype ? ftype : "";
+
+        const char* mime = reinterpret_cast<const char*>(sqlite3_column_text(stmt, 2));
+        meta.mime_type = mime ? mime : "";
+
+        meta.size_bytes     = sqlite3_column_int64(stmt, 3);
+        meta.mtime_unix     = sqlite3_column_int64(stmt, 4);
+        meta.last_indexed_at = sqlite3_column_int64(stmt, 5);
+        meta.width_px       = sqlite3_column_int(stmt, 6);
+        meta.height_px      = sqlite3_column_int(stmt, 7);
+        meta.duration_ms    = sqlite3_column_int64(stmt, 8);
+
+        const char* status = reinterpret_cast<const char*>(sqlite3_column_text(stmt, 9));
+        meta.status = status ? status : "pending";
+
+        meta.retry_count = sqlite3_column_int(stmt, 10);
+
+        results.push_back(meta);
+    }
+
+    sqlite3_finalize(stmt);
+    sqlite3_close(db);
+
+    LOGI("get_files returned %zu rows", results.size());
+    return results;
+}
+
+int get_file_count(const std::string& db_path)
+{
+    sqlite3* db = nullptr;
+    if (sqlite3_open_v2(db_path.c_str(), &db, SQLITE_OPEN_READONLY, nullptr) != SQLITE_OK)
+    {
+        LOGE("Failed to open DB for count: %s", sqlite3_errmsg(db));
+        sqlite3_close(db);
+        return -1;
+    }
+
+    sqlite3_stmt* stmt = nullptr;
+    const char* sql = "SELECT COUNT(*) FROM files;";
+
+    if (sqlite3_prepare_v2(db, sql, -1, &stmt, nullptr) != SQLITE_OK)
+    {
+        LOGE("Prepare failed for get_file_count: %s", sqlite3_errmsg(db));
+        sqlite3_close(db);
+        return -1;
+    }
+
+    int count = 0;
+    if (sqlite3_step(stmt) == SQLITE_ROW)
+    {
+        count = sqlite3_column_int(stmt, 0);
+    }
+
+    sqlite3_finalize(stmt);
+    sqlite3_close(db);
+
+    LOGI("get_file_count = %d", count);
+    return count;
+}

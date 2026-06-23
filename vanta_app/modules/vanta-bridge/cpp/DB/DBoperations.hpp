@@ -36,3 +36,12 @@ bool insert_files(
     const std::vector<file_meta>& files,
     const std::string& db_path
 );
+
+std::vector<file_meta> get_files(
+    const std::string& db_path,
+    int limit = 100
+);
+
+int get_file_count(
+    const std::string& db_path
+);
