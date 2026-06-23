@@ -1,0 +1,5 @@
+# Third Party Modules (OpenCV)
+thirdparty/opencv/android/sdk
+thirdparty/opencv/ios/opencv2.framework
+
+
