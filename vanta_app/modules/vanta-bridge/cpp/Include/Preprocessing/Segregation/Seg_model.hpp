@@ -51,8 +51,11 @@ private:
     // Core Computer Vision post-processing algorithm to filter duplicate bounding boxes
     std::vector<FaceResult> nms(std::vector<FaceResult>& proposals, float iou_threshold);
 
+
+    const std::string detector_path  = std::string(SEGREGATION_DIR) + "/.model/det_500m.onnx"; 
+    const std::string extractor_path = std::string(SEGREGATION_DIR) + "/.model/w600k_mbf.onnx";
 public:
-    bool load(const std::string& detector_path,const std::string& extractor_path);
+    bool load();
     bool unload();
     bool is_loaded();
 

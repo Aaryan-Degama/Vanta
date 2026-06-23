@@ -6,7 +6,7 @@ bool CLIP_session::load(){
         return true;
     }
 
-    std::string model_path = ".onnx_model/clip_image_fp16.onnx";
+    std::string model_path = std::string(CLIP_DIR) + ".model/clip_image_fp16.onnx";
 
     try{
         // :: To be removed ::

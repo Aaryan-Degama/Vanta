@@ -1,15 +1,9 @@
 #include "Seg_model.hpp"
 
-bool Face_embedding::load(const std::string& detector_path, const std::string& extractor_path) {
+bool Face_embedding::load() {
     /*
     Loads the Buffalo_sc face detector and extractor ONNX models into memory
     Uses shared ONNX Runtime environment with optimized session options
-    
-    Inputs:
-        detector_path: File path to the detector ONNX model file
-                      Model detects faces and outputs bounding boxes + keypoints
-        extractor_path: File path to the extractor ONNX model file
-                       Model extracts 512-dimensional embeddings from aligned faces
     
     Output:
         Returns true if both models loaded successfully, false if any error occurs

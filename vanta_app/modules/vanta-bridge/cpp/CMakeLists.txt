@@ -13,24 +13,44 @@ file(GLOB GRAPH_SOURCES
         "${CMAKE_CURRENT_SOURCE_DIR}/Include/Graph/*.cpp"
 )
 
+file(GLOB DB_CODE
+        "${CMAKE_CURRENT_SOURCE_DIR}/DB/*.cpp"
+)
+
+# 1. Define the library first
 add_library(vanta SHARED
-        // JNI
+        # JNI
         vanta.cpp
 
-        // DB Operations
-        DB/DBoperations.cpp
+        # DB
+        ${DB_CODE}
         
-        // CLIP 
+        # CLIP 
         ${CLIP_SOURCES}
 
-        // SQLITE & SQLITE-VEC 
+        # Segregation
+        ${SEGEREGATION_SOURCES}
+
+        # Graph 
+        ${GRAPH_SOURCES}
+
+        # SQLITE & SQLITE-VEC 
         sqlite/sqlite3.c
         sqlite_vec/sqlite-vec.c
 )
 
+# 2. NOW apply compile definitions to the 'vanta' target
+target_compile_definitions(vanta PRIVATE
+    CLIP_DIR="${CMAKE_CURRENT_SOURCE_DIR}/Include/Preprocessing/CLIP"
+    SEGREGATION_DIR="${CMAKE_CURRENT_SOURCE_DIR}/Include/Preprocessing/Segregation"
+)
+
+# 3. Include directories
 target_include_directories(vanta PRIVATE
         ${CMAKE_CURRENT_SOURCE_DIR}/sqlite
         ${CMAKE_CURRENT_SOURCE_DIR}/sqlite_vec
+        ${CMAKE_CURRENT_SOURCE_DIR}/DB
+        ${CMAKE_CURRENT_SOURCE_DIR}/Include
 )
 
 find_library(log-lib log)
