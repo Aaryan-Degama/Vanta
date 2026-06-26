@@ -11,6 +11,7 @@
       "bundleIdentifier": "com.aaryan-ka.VantaApp"
     },
     "android": {
+      "softwareKeyboardLayoutMode": "resize",
       "adaptiveIcon": {
         "backgroundColor": "#E6F4FE",
         "foregroundImage": "./assets/android-icon-foreground.png",

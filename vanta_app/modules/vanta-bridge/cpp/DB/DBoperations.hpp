@@ -7,7 +7,9 @@
 
 struct file_meta
 {
+    int64_t id;
     std::string content_uri;
+    std::string display_name;
     std::string file_type;
     std::string mime_type;
 
@@ -43,5 +45,9 @@ std::vector<file_meta> get_files(
 );
 
 int get_file_count(
+    const std::string& db_path
+);
+
+std::string get_database_stats_json(
     const std::string& db_path
 );

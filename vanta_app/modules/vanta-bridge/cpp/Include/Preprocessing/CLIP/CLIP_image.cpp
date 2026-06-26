@@ -30,15 +30,22 @@ cv::Mat CLIP_instance::load_img(std::string& path){
         channels[i] = (channels[i] - mean[i]) / std_dev[i];
     }
 
-    cv::merge(channels, image);                     // HWC to CHW
-    
-    image = cv::dnn::blobFromImage(image, 1.0, cv::Size(), cv::Scalar(), false, false);
+    // Allocate NCHW contiguous block
+    cv::Mat blob(1, 3 * 224 * 224, CV_32F);
+    float* blob_data = blob.ptr<float>();
 
-    // :: To be removed ::
-    std::cout << image.dims << std::endl;           
+    for (int c = 0; c < 3; ++c) {
+        // Channels are already 224x224 CV_32FC1
+        cv::Mat channel_continuous;
+        if (!channels[c].isContinuous()) {
+            channels[c].copyTo(channel_continuous);
+        } else {
+            channel_continuous = channels[c];
+        }
+        std::memcpy(blob_data + c * 224 * 224, channel_continuous.ptr<float>(), 224 * 224 * sizeof(float));
+    }
 
-    for(int i = 0; i < image.dims; i++)
-        std::cout << image.size[i] << " ";  
+    image = blob;
 
     return image;
 }

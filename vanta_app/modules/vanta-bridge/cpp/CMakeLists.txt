@@ -1,60 +1,107 @@
 cmake_minimum_required(VERSION 3.22.1)
-project(VANTA) 
 
-file(GLOB CLIP_SOURCES
-        "${CMAKE_CURRENT_SOURCE_DIR}/Include/Preprocessing/CLIP/*.cpp"
+project(VANTA)
+
+set(CMAKE_CXX_STANDARD 20)
+set(CMAKE_CXX_STANDARD_REQUIRED ON)
+
+# Source Files
+
+file(GLOB_RECURSE CLIP_SOURCES CONFIGURE_DEPENDS
+    "${CMAKE_CURRENT_SOURCE_DIR}/Include/Preprocessing/CLIP/*.cpp"
 )
 
-file(GLOB SEGEREGATION_SOURCES 
-        "${CMAKE_CURRENT_SOURCE_DIR}/Include/Preprocessing/Segregation/*.cpp"
+file(GLOB_RECURSE SEGREGATION_SOURCES CONFIGURE_DEPENDS
+    "${CMAKE_CURRENT_SOURCE_DIR}/Include/Preprocessing/Segregation/*.cpp"
 )
 
-file(GLOB GRAPH_SOURCES
-        "${CMAKE_CURRENT_SOURCE_DIR}/Include/Graph/*.cpp"
+file(GLOB_RECURSE GRAPH_SOURCES CONFIGURE_DEPENDS
+    "${CMAKE_CURRENT_SOURCE_DIR}/Include/Graph/*.cpp"
 )
 
-file(GLOB DB_CODE
-        "${CMAKE_CURRENT_SOURCE_DIR}/DB/*.cpp"
+file(GLOB_RECURSE QUERY_SOURCES CONFIGURE_DEPENDS
+    "${CMAKE_CURRENT_SOURCE_DIR}/Include/Query/*.cpp"
 )
 
-# 1. Define the library first
+file(GLOB_RECURSE DB_CODE CONFIGURE_DEPENDS
+    "${CMAKE_CURRENT_SOURCE_DIR}/DB/*.cpp"
+)
+
+# ONNX Runtime
+
+add_library(onnxruntime SHARED IMPORTED)
+
+set_target_properties(onnxruntime PROPERTIES
+    IMPORTED_LOCATION
+    "${CMAKE_CURRENT_SOURCE_DIR}/thirdparty/onnxruntime/android/libonnxruntime.so"
+)
+
+# OpenCV
+
+set(OpenCV_DIR
+    "${CMAKE_CURRENT_SOURCE_DIR}/thirdparty/opencv/android/sdk/native/jni"
+)
+
+find_package(OpenCV REQUIRED COMPONENTS core imgproc imgcodecs)
+
+# Main Library
+
 add_library(vanta SHARED
-        # JNI
-        vanta.cpp
+    vanta.cpp
 
-        # DB
-        ${DB_CODE}
-        
-        # CLIP 
-        #${CLIP_SOURCES}
+    ${DB_CODE}
 
-        # Segregation
-        #${SEGEREGATION_SOURCES}
 
-        # Graph 
-        #${GRAPH_SOURCES}
+    ${CLIP_SOURCES}
+    ${SEGREGATION_SOURCES}
+    ${GRAPH_SOURCES}
+    ${QUERY_SOURCES}
 
-        # SQLITE & SQLITE-VEC 
-        ${CMAKE_CURRENT_SOURCE_DIR}/thirdparty/sqlite/sqlite3.c
-        ${CMAKE_CURRENT_SOURCE_DIR}/thirdparty/sqlite_vec/sqlite-vec.c
+    ${CMAKE_CURRENT_SOURCE_DIR}/thirdparty/sqlite/sqlite3.c
+    ${CMAKE_CURRENT_SOURCE_DIR}/thirdparty/sqlite_vec/sqlite-vec.c
 )
 
-# 2. NOW apply compile definitions to the 'vanta' target
+# Compile Definitions
+
 target_compile_definitions(vanta PRIVATE
     CLIP_DIR="${CMAKE_CURRENT_SOURCE_DIR}/Include/Preprocessing/CLIP"
     SEGREGATION_DIR="${CMAKE_CURRENT_SOURCE_DIR}/Include/Preprocessing/Segregation"
 )
 
-# 3. Include directories
+# Include Directories
+
 target_include_directories(vanta PRIVATE
-        ${CMAKE_CURRENT_SOURCE_DIR}/thirdparty/sqlite
-        ${CMAKE_CURRENT_SOURCE_DIR}/thirdparty/sqlite_vec
-        ${CMAKE_CURRENT_SOURCE_DIR}/DB
-        ${CMAKE_CURRENT_SOURCE_DIR}/Include
+
+    # Project
+    ${CMAKE_CURRENT_SOURCE_DIR}/Include
+    ${CMAKE_CURRENT_SOURCE_DIR}/DB
+
+    # SQLite
+    ${CMAKE_CURRENT_SOURCE_DIR}/thirdparty/sqlite
+    ${CMAKE_CURRENT_SOURCE_DIR}/thirdparty/sqlite_vec
+
+    # ONNX Runtime
+    ${CMAKE_CURRENT_SOURCE_DIR}/thirdparty/onnxruntime/include/headers
+
+    # OpenCV
+    ${OpenCV_INCLUDE_DIRS}
 )
 
+# Android System Libraries
+
 find_library(log-lib log)
+find_library(android-lib android)
+find_library(jnigraphics-lib jnigraphics)
+
+# Linking
 
 target_link_libraries(vanta
-        ${log-lib}
+
+    ${log-lib}
+    ${android-lib}
+    ${jnigraphics-lib}
+
+    ${OpenCV_LIBS}
+
+    onnxruntime
 )

@@ -36,6 +36,85 @@ class VantaEngineModule : Module() {
         dbPath: String
     ): Array<HashMap<String, Any>>
 
+    // Triggers CLIP embedding generation in C++
+    private external fun generateEmbeddingsNative(
+        dbPath: String
+    ): Boolean
+
+    // Gets the current progress [processed, total]
+    private external fun getIndexProgressNative(): String
+
+    // Pauses embedding generation
+    private external fun pauseEmbeddingsNative()
+
+    private external fun getDatabaseStatsNative(
+        dbPath: String
+    ): String
+
+    private external fun searchImagesNative(
+        dbPath: String,
+        query: String
+    ): String
+
+    private fun extractAssetsIfNeeded(context: android.content.Context) {
+        val modelsDir = java.io.File(context.filesDir, "VantaModels")
+        if (!modelsDir.exists()) {
+            modelsDir.mkdirs()
+        }
+
+        val imageModel = java.io.File(modelsDir, "clip_image_fp16.onnx")
+        if (!imageModel.exists()) {
+            try {
+                context.assets.open("VantaModels/clip_image_fp16.onnx").use { input ->
+                    java.io.FileOutputStream(imageModel).use { output ->
+                        input.copyTo(output)
+                    }
+                }
+            } catch (e: Exception) {
+                e.printStackTrace()
+            }
+        }
+
+        val textModel = java.io.File(modelsDir, "clip_text_fp16.onnx")
+        if (!textModel.exists()) {
+            try {
+                context.assets.open("VantaModels/clip_text_fp16.onnx").use { input ->
+                    java.io.FileOutputStream(textModel).use { output ->
+                        input.copyTo(output)
+                    }
+                }
+            } catch (e: Exception) {
+                e.printStackTrace()
+            }
+        }
+
+        val vocabFile = java.io.File(modelsDir, "vocab.json")
+        if (!vocabFile.exists()) {
+            try {
+                context.assets.open("VantaModels/vocab.json").use { input ->
+                    java.io.FileOutputStream(vocabFile).use { output ->
+                        input.copyTo(output)
+                    }
+                }
+            } catch (e: Exception) {
+                e.printStackTrace()
+            }
+        }
+
+        val mergesFile = java.io.File(modelsDir, "merges.txt")
+        if (!mergesFile.exists()) {
+            try {
+                context.assets.open("VantaModels/merges.txt").use { input ->
+                    java.io.FileOutputStream(mergesFile).use { output ->
+                        input.copyTo(output)
+                    }
+                }
+            } catch (e: Exception) {
+                e.printStackTrace()
+            }
+        }
+    }
+
     override fun definition() = ModuleDefinition {
 
         // Name exposed to JavaScript.
@@ -169,6 +248,81 @@ class VantaEngineModule : Module() {
 
             // Convert Array<HashMap> to List<Map> for React Native.
             nativeResults.toList()
+        }
+
+        AsyncFunction("generateEmbeddings") { promise: expo.modules.kotlin.Promise ->
+            val context = appContext.reactContext
+            if (context == null) {
+                promise.reject("ERR", "Android context unavailable", null)
+                return@AsyncFunction
+            }
+
+            val dbFile = context.getDatabasePath("vanta.db")
+
+            if (!dbFile.exists()) {
+                promise.resolve(false)
+                return@AsyncFunction
+            }
+
+            Thread {
+                try {
+                    // Extract models from assets to internal storage so C++ can read them
+                    extractAssetsIfNeeded(context)
+
+                    // Run embedding generation natively
+                    val success = generateEmbeddingsNative(dbFile.absolutePath)
+                    promise.resolve(success)
+                } catch (e: Exception) {
+                    promise.reject("ERR", e.message, e)
+                }
+            }.start()
+        }
+
+        AsyncFunction("getIndexProgress") {
+            getIndexProgressNative()
+        }
+
+        AsyncFunction("pauseEmbeddings") {
+            pauseEmbeddingsNative()
+        }
+
+        AsyncFunction("getDatabaseStats") {
+            val context = appContext.reactContext
+                ?: throw IllegalStateException("Android context unavailable")
+
+            val dbFile = context.getDatabasePath("vanta.db")
+
+            if (!dbFile.exists()) {
+                return@AsyncFunction "{}"
+            }
+
+            getDatabaseStatsNative(dbFile.absolutePath)
+        }
+
+        AsyncFunction("searchImages") { query: String, promise: expo.modules.kotlin.Promise ->
+            val context = appContext.reactContext
+            if (context == null) {
+                promise.reject("ERR", "Android context unavailable", null)
+                return@AsyncFunction
+            }
+
+            val dbFile = context.getDatabasePath("vanta.db")
+
+            if (!dbFile.exists()) {
+                promise.resolve("[]")
+                return@AsyncFunction
+            }
+
+            Thread {
+                try {
+                    // Ensure model files are extracted (in case search is called before indexing)
+                    extractAssetsIfNeeded(context)
+                    val result = searchImagesNative(dbFile.absolutePath, query)
+                    promise.resolve(result)
+                } catch (e: Exception) {
+                    promise.reject("ERR", e.message, e)
+                }
+            }.start()
         }
     }
 }
