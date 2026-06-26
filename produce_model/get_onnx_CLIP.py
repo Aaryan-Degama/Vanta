@@ -13,7 +13,7 @@ dummy_image = torch.randn(1, 3, 224, 224)
 torch.onnx.export(
     model.visual,
     dummy_image,
-    "../.onnx_model/clip_image_encoder.onnx",
+    ".onnx_model/clip_image_encoder.onnx",
     export_params=True,
     opset_version=18,  # Updated to 18 to support LayerNorm properly
     do_constant_folding=True,
@@ -44,7 +44,7 @@ dummy_text = clip.tokenize(["search query"])
 torch.onnx.export(
     text_model,
     dummy_text,
-    "../.onnx_model/clip_text_encoder.onnx",
+    ".onnx_model/clip_text_encoder.onnx",
     export_params=True,
     opset_version=18,  # Updated to 18
     do_constant_folding=True,

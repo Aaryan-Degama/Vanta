@@ -96,6 +96,15 @@ private val mimeToFileType = hashMapOf(
     "image/heic"       to FileType.image,
     "image/heif"       to FileType.image,
     "image/tiff"       to FileType.image,
+    "image/x-adobe-dng" to FileType.image,
+    "image/x-canon-cr2" to FileType.image,
+    "image/x-canon-cr3" to FileType.image,
+    "image/x-nikon-nef" to FileType.image,
+    "image/x-fuji-raf"  to FileType.image,
+    "image/x-panasonic-rw2" to FileType.image,
+    "image/x-olympus-orf" to FileType.image,
+    "image/x-sony-arw"  to FileType.image,
+    "image/raw"         to FileType.image,
 
     // VIDEO
     "video/mp4"        to FileType.video,
@@ -170,6 +179,7 @@ data class FileMeta(
     val mediaId: Long,
     val contentUri: String,
     val absPath: String?,
+    val displayName: String,
     val fileDtype: FileType,
     val mimeType: String,
     val sizeBytes: Long,
@@ -196,6 +206,7 @@ private fun scanImages(context: Context): Sequence<FileMeta> = sequence {
     val projection = arrayOf(
         MediaStore.Images.Media._ID,
         MediaStore.Images.Media.DATA,
+        MediaStore.Images.Media.DISPLAY_NAME,
         MediaStore.Images.Media.MIME_TYPE,
         MediaStore.Images.Media.SIZE,
         MediaStore.Images.Media.DATE_MODIFIED,
@@ -229,6 +240,7 @@ private fun scanVideos(context: Context): Sequence<FileMeta> = sequence {
     val projection = arrayOf(
         MediaStore.Video.Media._ID,
         MediaStore.Video.Media.DATA,
+        MediaStore.Video.Media.DISPLAY_NAME,
         MediaStore.Video.Media.MIME_TYPE,
         MediaStore.Video.Media.SIZE,
         MediaStore.Video.Media.DATE_MODIFIED,
@@ -264,6 +276,7 @@ private fun scanAudio(context: Context): Sequence<FileMeta> = sequence {
     val projection = arrayOf(
         MediaStore.Audio.Media._ID,
         MediaStore.Audio.Media.DATA,
+        MediaStore.Audio.Media.DISPLAY_NAME,
         MediaStore.Audio.Media.MIME_TYPE,
         MediaStore.Audio.Media.SIZE,
         MediaStore.Audio.Media.DATE_MODIFIED,
@@ -299,6 +312,7 @@ private fun scanDocuments(context: Context): Sequence<FileMeta> = sequence {
     val projection = arrayOf(
         MediaStore.Files.FileColumns._ID,
         MediaStore.Files.FileColumns.DATA,
+        MediaStore.Files.FileColumns.DISPLAY_NAME,
         MediaStore.Files.FileColumns.MIME_TYPE,
         MediaStore.Files.FileColumns.SIZE,
         MediaStore.Files.FileColumns.DATE_MODIFIED
@@ -365,6 +379,7 @@ private suspend fun SequenceScope<FileMeta>.yieldFromMediaStore(
         val mimeIdx     = it.getColumnIndex(MediaStore.MediaColumns.MIME_TYPE)
         val sizeIdx     = it.getColumnIndex(MediaStore.MediaColumns.SIZE)
         val modifiedIdx = it.getColumnIndex(MediaStore.MediaColumns.DATE_MODIFIED)
+        val displayNameIdx = it.getColumnIndex(MediaStore.MediaColumns.DISPLAY_NAME)
 
         @Suppress("DEPRECATION")
         val pathIdx = it.getColumnIndex(MediaStore.MediaColumns.DATA)
@@ -395,11 +410,14 @@ private suspend fun SequenceScope<FileMeta>.yieldFromMediaStore(
             val uri     = ContentUris.withAppendedId(contentUri, mediaId)
             val extras  = extractExtras(it)
 
+            val displayName = if (displayNameIdx != -1) it.getString(displayNameIdx) ?: "" else ""
+
             yield(
                 FileMeta(
                     mediaId       = mediaId,
                     contentUri    = uri.toString(),
                     absPath       = path,
+                    displayName   = displayName,
                     fileDtype     = fileType,
                     mimeType      = mime,
                     sizeBytes     = sizeBytes,

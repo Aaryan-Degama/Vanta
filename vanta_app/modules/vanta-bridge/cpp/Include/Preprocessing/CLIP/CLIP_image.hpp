@@ -2,7 +2,6 @@
 #include <opencv2/core.hpp>
 #include <opencv2/imgcodecs.hpp>    // imread
 #include <opencv2/imgproc.hpp>      // resize, cvtColor
-#include <opencv2/dnn.hpp>          // blobFromImage
 
 
 #include <string>

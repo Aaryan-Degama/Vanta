@@ -1,6 +1,9 @@
 #include "DBoperations.hpp"
 #include <iostream>
 #include <android/log.h>
+#define SQLITE_CORE 1
+#include "sqlite-vec.h"
+#include <android/log.h>
 
 #define LOG_TAG "VantaDB"
 #define LOGI(...) __android_log_print(ANDROID_LOG_INFO, LOG_TAG, __VA_ARGS__)
@@ -14,9 +17,9 @@ sqlite3* initialize_database(
     const std::string DB_SCHEMA = R"(
 CREATE TABLE IF NOT EXISTS files (
     id              INTEGER PRIMARY KEY,
-    content_uri     TEXT NOT NULL UNIQUE,
-    filetype        TEXT NOT NULL
-                    CHECK(filetype IN ('image','document','audio','video')),
+    abs_path        TEXT    NOT NULL UNIQUE,
+    display_name    TEXT    NOT NULL DEFAULT '',
+    filetype        TEXT    NOT NULL CHECK(filetype IN ('picture','document','audio','video')),
     mime_type       TEXT,
     size_bytes      INTEGER,
     mtime_unix      INTEGER NOT NULL,
@@ -24,13 +27,16 @@ CREATE TABLE IF NOT EXISTS files (
     width_px        INTEGER,
     height_px       INTEGER,
     duration_ms     INTEGER,
-    status          TEXT NOT NULL DEFAULT 'pending'
+    face_count      INTEGER NOT NULL DEFAULT 0,  -- total detected faces, used for exclusive entity queries
+    status          TEXT    NOT NULL DEFAULT 'pending'
                     CHECK(status IN ('pending','indexed','failed','skipped')),
     retry_count     INTEGER NOT NULL DEFAULT 0
 );
+
 CREATE INDEX IF NOT EXISTS idx_files_filetype ON files(filetype);
-CREATE INDEX IF NOT EXISTS idx_files_mtime ON files(mtime_unix);
-CREATE INDEX IF NOT EXISTS idx_files_status ON files(status);
+CREATE INDEX IF NOT EXISTS idx_files_mtime    ON files(mtime_unix);
+CREATE INDEX IF NOT EXISTS idx_files_status     ON files(status);
+CREATE INDEX IF NOT EXISTS idx_files_face_count ON files(face_count);
 )";
 
     if (sqlite3_open(db_path.c_str(), &db) != SQLITE_OK)
@@ -39,6 +45,8 @@ CREATE INDEX IF NOT EXISTS idx_files_status ON files(status);
         sqlite3_close(db);
         return nullptr;
     }
+
+    sqlite3_auto_extension((void (*)())sqlite3_vec_init);
 
     char* err_msg = nullptr;
     if (sqlite3_exec(db, "PRAGMA foreign_keys = ON; PRAGMA journal_mode = WAL;", nullptr, nullptr, &err_msg) != SQLITE_OK)
@@ -55,6 +63,8 @@ CREATE INDEX IF NOT EXISTS idx_files_status ON files(status);
         return nullptr;
     }
 
+    // Removed accidental WIPE
+
     return db;
 }
 
@@ -63,9 +73,9 @@ bool insert_file(sqlite3* db, const file_meta& file)
     sqlite3_stmt* stmt = nullptr;
     const char* sql = R"(
         INSERT OR IGNORE INTO files (
-            content_uri, filetype, mime_type, size_bytes, mtime_unix,
+            abs_path, display_name, filetype, mime_type, size_bytes, mtime_unix,
             last_indexed_at, width_px, height_px, duration_ms, status, retry_count
-        ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?);
+        ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?);
     )";
 
     if (sqlite3_prepare_v2(db, sql, -1, &stmt, nullptr) != SQLITE_OK)
@@ -75,16 +85,17 @@ bool insert_file(sqlite3* db, const file_meta& file)
     }
 
     sqlite3_bind_text(stmt, 1, file.content_uri.c_str(), -1, SQLITE_TRANSIENT);
-    sqlite3_bind_text(stmt, 2, file.file_type.c_str(), -1, SQLITE_TRANSIENT);
-    sqlite3_bind_text(stmt, 3, file.mime_type.c_str(), -1, SQLITE_TRANSIENT);
-    sqlite3_bind_int64(stmt, 4, file.size_bytes);
-    sqlite3_bind_int64(stmt, 5, file.mtime_unix);
-    sqlite3_bind_int64(stmt, 6, file.last_indexed_at);
-    sqlite3_bind_int(stmt, 7, file.width_px);
-    sqlite3_bind_int(stmt, 8, file.height_px);
-    sqlite3_bind_int64(stmt, 9, file.duration_ms);
-    sqlite3_bind_text(stmt, 10, file.status.c_str(), -1, SQLITE_TRANSIENT);
-    sqlite3_bind_int(stmt, 11, file.retry_count);
+    sqlite3_bind_text(stmt, 2, file.display_name.c_str(), -1, SQLITE_TRANSIENT);
+    sqlite3_bind_text(stmt, 3, file.file_type.c_str(), -1, SQLITE_TRANSIENT);
+    sqlite3_bind_text(stmt, 4, file.mime_type.c_str(), -1, SQLITE_TRANSIENT);
+    sqlite3_bind_int64(stmt, 5, file.size_bytes);
+    sqlite3_bind_int64(stmt, 6, file.mtime_unix);
+    sqlite3_bind_int64(stmt, 7, file.last_indexed_at);
+    sqlite3_bind_int(stmt, 8, file.width_px);
+    sqlite3_bind_int(stmt, 9, file.height_px);
+    sqlite3_bind_int64(stmt, 10, file.duration_ms);
+    sqlite3_bind_text(stmt, 11, file.status.c_str(), -1, SQLITE_TRANSIENT);
+    sqlite3_bind_int(stmt, 12, file.retry_count);
 
     bool success = sqlite3_step(stmt) == SQLITE_DONE;
     sqlite3_finalize(stmt);
@@ -126,7 +137,7 @@ std::vector<file_meta> get_files(const std::string& db_path, int limit)
 
     sqlite3_stmt* stmt = nullptr;
     const char* sql = R"(
-        SELECT content_uri, filetype, mime_type, size_bytes, mtime_unix,
+        SELECT id, abs_path, display_name, filetype, mime_type, size_bytes, mtime_unix,
                last_indexed_at, width_px, height_px, duration_ms, status, retry_count
         FROM files
         LIMIT ?;
@@ -145,26 +156,31 @@ std::vector<file_meta> get_files(const std::string& db_path, int limit)
     {
         file_meta meta;
 
-        const char* uri = reinterpret_cast<const char*>(sqlite3_column_text(stmt, 0));
+        meta.id = sqlite3_column_int64(stmt, 0);
+
+        const char* uri = reinterpret_cast<const char*>(sqlite3_column_text(stmt, 1));
         meta.content_uri = uri ? uri : "";
 
-        const char* ftype = reinterpret_cast<const char*>(sqlite3_column_text(stmt, 1));
+        const char* dname = reinterpret_cast<const char*>(sqlite3_column_text(stmt, 2));
+        meta.display_name = dname ? dname : "";
+
+        const char* ftype = reinterpret_cast<const char*>(sqlite3_column_text(stmt, 3));
         meta.file_type = ftype ? ftype : "";
 
-        const char* mime = reinterpret_cast<const char*>(sqlite3_column_text(stmt, 2));
+        const char* mime = reinterpret_cast<const char*>(sqlite3_column_text(stmt, 4));
         meta.mime_type = mime ? mime : "";
 
-        meta.size_bytes     = sqlite3_column_int64(stmt, 3);
-        meta.mtime_unix     = sqlite3_column_int64(stmt, 4);
-        meta.last_indexed_at = sqlite3_column_int64(stmt, 5);
-        meta.width_px       = sqlite3_column_int(stmt, 6);
-        meta.height_px      = sqlite3_column_int(stmt, 7);
-        meta.duration_ms    = sqlite3_column_int64(stmt, 8);
+        meta.size_bytes     = sqlite3_column_int64(stmt, 5);
+        meta.mtime_unix     = sqlite3_column_int64(stmt, 6);
+        meta.last_indexed_at = sqlite3_column_int64(stmt, 7);
+        meta.width_px       = sqlite3_column_int(stmt, 8);
+        meta.height_px      = sqlite3_column_int(stmt, 9);
+        meta.duration_ms    = sqlite3_column_int64(stmt, 10);
 
-        const char* status = reinterpret_cast<const char*>(sqlite3_column_text(stmt, 9));
+        const char* status = reinterpret_cast<const char*>(sqlite3_column_text(stmt, 11));
         meta.status = status ? status : "pending";
 
-        meta.retry_count = sqlite3_column_int(stmt, 10);
+        meta.retry_count = sqlite3_column_int(stmt, 12);
 
         results.push_back(meta);
     }
@@ -207,4 +223,43 @@ int get_file_count(const std::string& db_path)
 
     LOGI("get_file_count = %d", count);
     return count;
+}
+
+std::string get_database_stats_json(const std::string& db_path)
+{
+    sqlite3* db = nullptr;
+    if (sqlite3_open_v2(db_path.c_str(), &db, SQLITE_OPEN_READONLY, nullptr) != SQLITE_OK)
+    {
+        return "{}";
+    }
+
+    sqlite3_stmt* stmt = nullptr;
+    const char* sql = "SELECT filetype, COUNT(*), SUM(size_bytes) FROM files GROUP BY filetype;";
+
+    if (sqlite3_prepare_v2(db, sql, -1, &stmt, nullptr) != SQLITE_OK)
+    {
+        sqlite3_close(db);
+        return "{}";
+    }
+
+    std::string json = "{";
+    bool first = true;
+    while (sqlite3_step(stmt) == SQLITE_ROW)
+    {
+        const char* ftype = reinterpret_cast<const char*>(sqlite3_column_text(stmt, 0));
+        int count = sqlite3_column_int(stmt, 1);
+        int64_t size_bytes = sqlite3_column_int64(stmt, 2);
+
+        if (ftype) {
+            if (!first) json += ", ";
+            json += "\"" + std::string(ftype) + "\": {\"count\": " + std::to_string(count) + ", \"size\": " + std::to_string(size_bytes) + "}";
+            first = false;
+        }
+    }
+    json += "}";
+
+    sqlite3_finalize(stmt);
+    sqlite3_close(db);
+
+    return json;
 }

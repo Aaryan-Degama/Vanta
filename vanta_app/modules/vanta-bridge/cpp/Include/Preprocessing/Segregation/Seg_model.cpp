@@ -46,7 +46,7 @@ bool Face_embedding::load() {
             
             extractor_session = std::make_unique<Ort::Session>(shared_env, extractor_path.c_str(), session_options_e);
             e_loaded = true;
-        } catch {
+        } catch (...) {
             return false;
         }        
     }
@@ -136,8 +136,8 @@ bool Face_embedding::is_loaded() {
     return d_loaded && e_loaded;
 }
 
-cv::Mat load_img_seg(const std::string& PATH){
-    return cv::imread(image_path);
+cv::Mat Face_embedding::load_img_seg(const std::string& PATH){
+    return cv::imread(PATH);
 }
 
 std::vector<FaceResult> Face_embedding::nms(std::vector<FaceResult>& proposals, float iou_threshold) {

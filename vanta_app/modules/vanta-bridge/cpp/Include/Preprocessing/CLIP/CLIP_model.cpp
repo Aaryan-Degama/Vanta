@@ -1,18 +1,23 @@
 #include "CLIP_model.hpp"
+#include <android/log.h>
 
+#define LOG_TAG "VantaEngine"
+#define LOGE(...) __android_log_print(ANDROID_LOG_ERROR, LOG_TAG, __VA_ARGS__)
 
 bool CLIP_session::load(){
     if( loaded ) {
         return true;
     }
 
-    std::string model_path = std::string(CLIP_DIR) + ".model/clip_image_fp16.onnx";
+    std::string model_path = "/data/user/0/com.aaryan_ka.VantaApp/files/VantaModels/clip_image_fp16.onnx";
+    std::string text_model_path = "/data/user/0/com.aaryan_ka.VantaApp/files/VantaModels/clip_text_fp16.onnx";
 
     try{
         // :: To be removed ::
         std::cout << "Loading CLIP Model ...\n";
 
         vision_session = std::make_unique<Ort::Session>(env, model_path.c_str(),session_options);
+        text_session = std::make_unique<Ort::Session>(env, text_model_path.c_str(),session_options);
         
         // :: To be removed ::
         std::cout << "Model successfully loaded into memory!\n";
@@ -21,9 +26,7 @@ bool CLIP_session::load(){
 
         return true;
     }catch(const std::exception& e){
-        // :: To be removed ::
-        std::cerr << "Error loading ONNX model: " << e.what() << std::endl;
-
+        LOGE("Error loading ONNX model: %s", e.what());
         return false;
     }
 }
@@ -36,6 +39,10 @@ std::vector<float> CLIP_session::get_embedding(const CLIP_instance& img) {
         throw std::runtime_error("Model not Loaded, can not create embedding. Load the model first. try <your_model>.load()");
     }
     cv::Mat image = img.get_img();
+
+    if (image.empty()) {
+        throw std::runtime_error("Empty image matrix - file could not be read or is invalid.");
+    }
 
     std::vector<Ort::Float16_t> fp16_data(      
         1 * 3 * 224 * 224
@@ -101,7 +108,7 @@ std::vector<float> CLIP_session::get_embedding(const CLIP_instance& img) {
     std::vector<float> embedding(dim);
     
     for(size_t i = 0; i < dim; ++i) {
-        embedding[i] = static_cast<float>(fp16[i]);
+        embedding[i] = fp16[i].ToFloat();
     }
     
     float norm = 0.0f;
@@ -114,6 +121,62 @@ std::vector<float> CLIP_session::get_embedding(const CLIP_instance& img) {
     for(float& x : embedding)
         x /= norm;
     
+    return embedding;
+}
+
+std::vector<float> CLIP_session::get_text_embedding(const std::vector<int64_t>& tokens) {
+    if(!loaded || !text_session) {     
+        throw std::runtime_error("Text Model not Loaded");
+    }
+
+    std::vector<int64_t> input_shape = {
+        1,
+        static_cast<int64_t>(tokens.size())
+    };
+
+    // Need int32_t copy because the ONNX model expects int32 input
+    std::vector<int32_t> tokens_int32(tokens.begin(), tokens.end());
+
+    Ort::Value input_tensor =
+        Ort::Value::CreateTensor<int32_t>(
+            memory_info,
+            tokens_int32.data(),
+            tokens_int32.size(),
+            input_shape.data(),
+            input_shape.size()
+        );
+
+    const char* input_names[] = {"TEXT"};
+    const char* output_names[] = {"TEXT_EMBEDDING"};
+
+    auto output_tensors = text_session->Run(
+        Ort::RunOptions{nullptr},
+        input_names,
+        &input_tensor,
+        1,
+        output_names,
+        1
+    );
+
+    Ort::Value& output_tensor = output_tensors.front();
+    const Ort::Float16_t* output_data = output_tensor.GetTensorData<Ort::Float16_t>();
+    size_t output_count = output_tensor.GetTensorTypeAndShapeInfo().GetElementCount();
+
+    std::vector<float> embedding(output_count);
+    for(size_t i = 0; i < output_count; ++i) {
+        embedding[i] = output_data[i].ToFloat();
+    }
+
+    // L2-normalize to match image embeddings (required for cosine similarity)
+    float norm = 0.0f;
+    for(float x : embedding)
+        norm += x * x;
+    norm = std::sqrt(norm);
+    if(norm > 0.0f) {
+        for(float& x : embedding)
+            x /= norm;
+    }
+
     return embedding;
 }
 

@@ -23,6 +23,7 @@ class CLIP_session{
 
     Ort::SessionOptions session_options;
     std::unique_ptr<Ort::Session> vision_session;
+    std::unique_ptr<Ort::Session> text_session;
 
     Ort::MemoryInfo memory_info = 
         Ort::MemoryInfo::CreateCpu(
@@ -40,4 +41,5 @@ class CLIP_session{
     bool is_loaded();
 
     std::vector<float> get_embedding(const CLIP_instance& img);    //To get the CLIP embedding
+    std::vector<float> get_text_embedding(const std::vector<int64_t>& tokens); // To get the text embedding
 };
