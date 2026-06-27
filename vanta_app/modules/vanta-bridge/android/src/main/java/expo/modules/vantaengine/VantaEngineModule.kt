@@ -264,18 +264,18 @@ class VantaEngineModule : Module() {
                 return@AsyncFunction
             }
 
-            Thread {
-                try {
-                    // Extract models from assets to internal storage so C++ can read them
-                    extractAssetsIfNeeded(context)
+            // Start Foreground Service to keep process alive and do the actual work
+            val serviceIntent = android.content.Intent(context, IndexingService::class.java).apply {
+                action = IndexingService.ACTION_START
+                putExtra("dbPath", dbFile.absolutePath)
+            }
+            if (android.os.Build.VERSION.SDK_INT >= android.os.Build.VERSION_CODES.O) {
+                context.startForegroundService(serviceIntent)
+            } else {
+                context.startService(serviceIntent)
+            }
 
-                    // Run embedding generation natively
-                    val success = generateEmbeddingsNative(dbFile.absolutePath)
-                    promise.resolve(success)
-                } catch (e: Exception) {
-                    promise.reject("ERR", e.message, e)
-                }
-            }.start()
+            promise.resolve(true)
         }
 
         AsyncFunction("getIndexProgress") {

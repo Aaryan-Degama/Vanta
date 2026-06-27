@@ -2,4 +2,12 @@
   <uses-permission android:name="android.permission.READ_MEDIA_AUDIO" />
   <uses-permission android:name="android.permission.READ_MEDIA_VIDEO" />
   <uses-permission android:name="android.permission.READ_MEDIA_IMAGES" />
+  <uses-permission android:name="android.permission.FOREGROUND_SERVICE" />
+  <uses-permission android:name="android.permission.FOREGROUND_SERVICE_DATA_SYNC" />
+  <application>
+    <service 
+        android:name="expo.modules.vantaengine.IndexingService" 
+        android:foregroundServiceType="dataSync"
+        android:exported="false" />
+  </application>
 </manifest>

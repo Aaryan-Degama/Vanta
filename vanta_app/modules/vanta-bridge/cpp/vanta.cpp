@@ -226,6 +226,20 @@ extern "C" JNIEXPORT jboolean JNICALL
 Java_expo_modules_vantaengine_VantaEngineModule_generateEmbeddingsNative(
     JNIEnv* env,
     jobject /* this */,
+    jstring dbPath);
+
+extern "C" JNIEXPORT jboolean JNICALL
+Java_expo_modules_vantaengine_IndexingService_generateEmbeddingsNative(
+    JNIEnv* env,
+    jobject /* this */,
+    jstring dbPath) {
+    return Java_expo_modules_vantaengine_VantaEngineModule_generateEmbeddingsNative(env, nullptr, dbPath);
+}
+
+extern "C" JNIEXPORT jboolean JNICALL
+Java_expo_modules_vantaengine_VantaEngineModule_generateEmbeddingsNative(
+    JNIEnv* env,
+    jobject /* this */,
     jstring dbPath) {
 
     if (dbPath == nullptr) return JNI_FALSE;
