@@ -9,6 +9,8 @@
 #define LOGI(...) __android_log_print(ANDROID_LOG_INFO, LOG_TAG, __VA_ARGS__)
 #define LOGE(...) __android_log_print(ANDROID_LOG_ERROR, LOG_TAG, __VA_ARGS__)
 
+bool init_graph_schema(sqlite3* db);
+
 sqlite3* initialize_database(
     const std::string& db_path)
 {
@@ -61,6 +63,10 @@ CREATE INDEX IF NOT EXISTS idx_files_face_count ON files(face_count);
         sqlite3_free(err_msg);
         sqlite3_close(db);
         return nullptr;
+    }
+
+    if (!init_graph_schema(db)) {
+        LOGE("Warning: init_graph_schema failed to initialize graph schema.");
     }
 
     // Removed accidental WIPE

@@ -4,6 +4,7 @@
 #include <android/log.h>
 #include "DBoperations.hpp"
 #include "clip_db.hpp"
+#include "graph_db.hpp"
 #include "Query/Query_processing/query_engine.hpp"
 #include "Preprocessing/CLIP/CLIP_model.hpp"
 #include <atomic>
@@ -439,6 +440,247 @@ Java_expo_modules_vantaengine_VantaEngineModule_searchImagesNative(
     json += "]";
 
     LOGI("Returning JSON (%zu chars) with %zu results", json.size(), results.size());
+
+    return env->NewStringUTF(json.c_str());
+}
+
+extern "C" JNIEXPORT jstring JNICALL
+Java_expo_modules_vantaengine_VantaEngineModule_getTopEntitiesNative(
+    JNIEnv* env,
+    jobject /* this */,
+    jstring dbPath) {
+
+    if (dbPath == nullptr) return env->NewStringUTF("[]");
+
+    const char* db_path_cstr = env->GetStringUTFChars(dbPath, nullptr);
+    std::string db_path(db_path_cstr);
+    env->ReleaseStringUTFChars(dbPath, db_path_cstr);
+
+    sqlite3* db = nullptr;
+    if (sqlite3_open_v2(db_path.c_str(), &db, SQLITE_OPEN_READONLY, nullptr) != SQLITE_OK) {
+        LOGE("Failed to open DB for getTopEntitiesNative: %s", sqlite3_errmsg(db));
+        if (db) sqlite3_close(db);
+        return env->NewStringUTF("[]");
+    }
+
+    std::vector<EntityMeta> entities = get_top_entities(db, 50);
+
+    sqlite3_close(db);
+
+    auto escape_json = [](const std::string& s) -> std::string {
+        std::string out;
+        out.reserve(s.size());
+        for (char c : s) {
+            if (c == '"')       out += "\\\"";
+            else if (c == '\\') out += "\\\\";
+            else if (c == '\n') out += "\\n";
+            else if (c == '\r') out += "\\r";
+            else if (c == '\t') out += "\\t";
+            else out += c;
+        }
+        return out;
+    };
+
+    std::string json = "[";
+    for (size_t i = 0; i < entities.size(); ++i) {
+        if (i > 0) json += ",";
+        json += "{";
+        json += "\"entity_id\":" + std::to_string(entities[i].entity_id) + ",";
+        json += "\"display_name\":\"" + escape_json(entities[i].display_name) + "\",";
+        json += "\"sample_count\":" + std::to_string(entities[i].sample_count) + ",";
+        json += "\"confidence\":" + std::to_string(entities[i].confidence);
+        json += "}";
+    }
+    json += "]";
+
+    return env->NewStringUTF(json.c_str());
+}
+
+extern "C" JNIEXPORT jstring JNICALL
+Java_expo_modules_vantaengine_VantaEngineModule_getBestFaceCropNative(
+    JNIEnv* env,
+    jobject /* this */,
+    jstring dbPath,
+    jlong entityId) {
+
+    if (dbPath == nullptr) return env->NewStringUTF("{}");
+
+    const char* db_path_cstr = env->GetStringUTFChars(dbPath, nullptr);
+    std::string db_path(db_path_cstr);
+    env->ReleaseStringUTFChars(dbPath, db_path_cstr);
+
+    sqlite3* db = nullptr;
+    if (sqlite3_open_v2(db_path.c_str(), &db, SQLITE_OPEN_READONLY, nullptr) != SQLITE_OK) {
+        LOGE("Failed to open DB for getBestFaceCropNative: %s", sqlite3_errmsg(db));
+        if (db) sqlite3_close(db);
+        return env->NewStringUTF("{}");
+    }
+
+    FaceCrop crop = get_best_face_crop(db, static_cast<int64_t>(entityId));
+
+    sqlite3_close(db);
+
+    if (crop.file_id == -1) {
+        return env->NewStringUTF("{}");
+    }
+
+    auto escape_json = [](const std::string& s) -> std::string {
+        std::string out;
+        out.reserve(s.size());
+        for (char c : s) {
+            if (c == '"')       out += "\\\"";
+            else if (c == '\\') out += "\\\\";
+            else if (c == '\n') out += "\\n";
+            else if (c == '\r') out += "\\r";
+            else if (c == '\t') out += "\\t";
+            else out += c;
+        }
+        return out;
+    };
+
+    std::string json = "{";
+    json += "\"file_id\":" + std::to_string(crop.file_id) + ",";
+    json += "\"abs_path\":\"" + escape_json(crop.abs_path) + "\",";
+    json += "\"bbox_x\":" + std::to_string(crop.bbox_x) + ",";
+    json += "\"bbox_y\":" + std::to_string(crop.bbox_y) + ",";
+    json += "\"bbox_w\":" + std::to_string(crop.bbox_w) + ",";
+    json += "\"bbox_h\":" + std::to_string(crop.bbox_h);
+    json += "}";
+
+    return env->NewStringUTF(json.c_str());
+}
+
+extern "C" JNIEXPORT jboolean JNICALL
+Java_expo_modules_vantaengine_VantaEngineModule_setEntityNameNative(
+    JNIEnv* env,
+    jobject /* this */,
+    jstring dbPath,
+    jlong entityId,
+    jstring name) {
+
+    if (dbPath == nullptr || name == nullptr) return JNI_FALSE;
+
+    const char* db_path_cstr = env->GetStringUTFChars(dbPath, nullptr);
+    std::string db_path(db_path_cstr);
+    env->ReleaseStringUTFChars(dbPath, db_path_cstr);
+
+    const char* name_cstr = env->GetStringUTFChars(name, nullptr);
+    std::string entity_name(name_cstr);
+    env->ReleaseStringUTFChars(name, name_cstr);
+
+    sqlite3* db = nullptr;
+    if (sqlite3_open_v2(db_path.c_str(), &db, SQLITE_OPEN_READWRITE, nullptr) != SQLITE_OK) {
+        LOGE("Failed to open DB for setEntityNameNative: %s", sqlite3_errmsg(db));
+        if (db) sqlite3_close(db);
+        return JNI_FALSE;
+    }
+
+    bool success = set_entity_name(db, static_cast<int64_t>(entityId), entity_name);
+
+    sqlite3_close(db);
+
+    return success ? JNI_TRUE : JNI_FALSE;
+}
+
+extern "C" JNIEXPORT jstring JNICALL
+Java_expo_modules_vantaengine_VantaEngineModule_getEntityNeighborsNative(
+    JNIEnv* env,
+    jobject /* this */,
+    jstring dbPath,
+    jlong entityId) {
+
+    if (dbPath == nullptr) return env->NewStringUTF("[]");
+
+    const char* db_path_cstr = env->GetStringUTFChars(dbPath, nullptr);
+    std::string db_path(db_path_cstr);
+    env->ReleaseStringUTFChars(dbPath, db_path_cstr);
+
+    sqlite3* db = nullptr;
+    if (sqlite3_open_v2(db_path.c_str(), &db, SQLITE_OPEN_READONLY, nullptr) != SQLITE_OK) {
+        LOGE("Failed to open DB for getEntityNeighborsNative: %s", sqlite3_errmsg(db));
+        if (db) sqlite3_close(db);
+        return env->NewStringUTF("[]");
+    }
+
+    std::vector<NeighborResult> neighbors = get_neighbors(db, static_cast<int64_t>(entityId), 20);
+
+    sqlite3_close(db);
+
+    auto escape_json = [](const std::string& s) -> std::string {
+        std::string out;
+        out.reserve(s.size());
+        for (char c : s) {
+            if (c == '"')       out += "\\\"";
+            else if (c == '\\') out += "\\\\";
+            else if (c == '\n') out += "\\n";
+            else if (c == '\r') out += "\\r";
+            else if (c == '\t') out += "\\t";
+            else out += c;
+        }
+        return out;
+    };
+
+    std::string json = "[";
+    for (size_t i = 0; i < neighbors.size(); ++i) {
+        if (i > 0) json += ",";
+        json += "{";
+        json += "\"neighbor_id\":" + std::to_string(neighbors[i].neighbor_id) + ",";
+        json += "\"display_name\":\"" + escape_json(neighbors[i].display_name) + "\",";
+        json += "\"co_occurrence_count\":" + std::to_string(neighbors[i].co_occurrence_count);
+        json += "}";
+    }
+    json += "]";
+
+    return env->NewStringUTF(json.c_str());
+}
+
+extern "C" JNIEXPORT jstring JNICALL
+Java_expo_modules_vantaengine_VantaEngineModule_getEntityFilesNative(
+    JNIEnv* env,
+    jobject /* this */,
+    jstring dbPath,
+    jlong entityId) {
+
+    if (dbPath == nullptr) return env->NewStringUTF("[]");
+
+    const char* db_path_cstr = env->GetStringUTFChars(dbPath, nullptr);
+    std::string db_path(db_path_cstr);
+    env->ReleaseStringUTFChars(dbPath, db_path_cstr);
+
+    sqlite3* db = nullptr;
+    if (sqlite3_open_v2(db_path.c_str(), &db, SQLITE_OPEN_READONLY, nullptr) != SQLITE_OK) {
+        LOGE("Failed to open DB for getEntityFilesNative: %s", sqlite3_errmsg(db));
+        if (db) sqlite3_close(db);
+        return env->NewStringUTF("[]");
+    }
+
+    std::vector<EntityFile> files = get_entity_files(db, static_cast<int64_t>(entityId), 100);
+
+    sqlite3_close(db);
+
+    auto escape_json = [](const std::string& s) -> std::string {
+        std::string out;
+        out.reserve(s.size());
+        for (char c : s) {
+            if (c == '"')       out += "\\\"";
+            else if (c == '\\') out += "\\\\";
+            else if (c == '\n') out += "\\n";
+            else if (c == '\r') out += "\\r";
+            else if (c == '\t') out += "\\t";
+            else out += c;
+        }
+        return out;
+    };
+
+    std::string json = "[";
+    for (size_t i = 0; i < files.size(); ++i) {
+        if (i > 0) json += ",";
+        json += "{";
+        json += "\"file_id\":" + std::to_string(files[i].file_id) + ",";
+        json += "\"abs_path\":\"" + escape_json(files[i].abs_path) + "\"";
+        json += "}";
+    }
+    json += "]";
 
     return env->NewStringUTF(json.c_str());
 }
