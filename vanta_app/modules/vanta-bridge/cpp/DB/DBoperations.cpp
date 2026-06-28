@@ -228,7 +228,6 @@ int get_file_count(const std::string& db_path)
 std::string get_database_stats_json(const std::string& db_path)
 {
     sqlite3* db = nullptr;
-    sqlite3_auto_extension((void (*)())sqlite3_vec_init);
     if (sqlite3_open_v2(db_path.c_str(), &db, SQLITE_OPEN_READONLY, nullptr) != SQLITE_OK)
     {
         return "{}";
@@ -257,30 +256,6 @@ std::string get_database_stats_json(const std::string& db_path)
             first = false;
         }
     }
-    
-    // Add clip_vec and target_files count
-    int clip_vec_count = 0;
-    sqlite3_stmt* stmt1 = nullptr;
-    if (sqlite3_prepare_v2(db, "SELECT count(*) FROM clip_vec;", -1, &stmt1, nullptr) == SQLITE_OK) {
-        if (sqlite3_step(stmt1) == SQLITE_ROW) {
-            clip_vec_count = sqlite3_column_int(stmt1, 0);
-        }
-        sqlite3_finalize(stmt1);
-    }
-
-    int target_files_count = 0;
-    sqlite3_stmt* stmt2 = nullptr;
-    if (sqlite3_prepare_v2(db, "SELECT count(*) FROM files WHERE status != 'skipped';", -1, &stmt2, nullptr) == SQLITE_OK) {
-        if (sqlite3_step(stmt2) == SQLITE_ROW) {
-            target_files_count = sqlite3_column_int(stmt2, 0);
-        }
-        sqlite3_finalize(stmt2);
-    }
-    
-    if (!first) json += ", ";
-    json += "\"clip_vec_count\": " + std::to_string(clip_vec_count) + ", ";
-    json += "\"target_files_count\": " + std::to_string(target_files_count);
-
     json += "}";
 
     sqlite3_finalize(stmt);
