@@ -9,65 +9,11 @@ import { View,
   ScrollView, 
   Image, 
   ActivityIndicator, 
-  Animated,
-  Keyboard } from 'react-native';
+  Animated } from 'react-native';
 import { useTheme } from '../ThemeContext';
 import { useNavigation } from '@react-navigation/native';
 import { Ionicons } from '@expo/vector-icons';
 import { searchImages } from '../modules/vanta-bridge';
-
-const StaggeredResultItem = ({ item, index, colors }: any) => {
-  const [displayItem, setDisplayItem] = useState(item);
-  const rotateAnim = useRef(new Animated.Value(0)).current; 
-
-  const col = index % 3;
-  const row = Math.floor(index / 3);
-  const diagonalIndex = row + col;
-  const staggerDelay = Math.min(diagonalIndex * 40, 800); // Cap delay for large grids
-
-  React.useEffect(() => {
-    if (item?.abs_path !== displayItem?.abs_path) {
-      Animated.timing(rotateAnim, {
-        toValue: 90,
-        duration: 150,
-        delay: staggerDelay,
-        useNativeDriver: true,
-      }).start(() => {
-        setDisplayItem(item);
-        rotateAnim.setValue(-90);
-        Animated.timing(rotateAnim, {
-          toValue: 0,
-          duration: 150,
-          useNativeDriver: true,
-        }).start();
-      });
-    } else {
-      setDisplayItem(item); // sync just in case
-    }
-  }, [item]);
-
-  const rotateY = rotateAnim.interpolate({
-    inputRange: [-90, 0, 90],
-    outputRange: ['-90deg', '0deg', '90deg']
-  });
-
-  const rotateX = rotateAnim.interpolate({
-    inputRange: [-90, 0, 90],
-    outputRange: ['-90deg', '0deg', '90deg']
-  });
-
-  return (
-    <Animated.View style={{ width: '33.33%', aspectRatio: 1, padding: 1, transform: [{ scaleY: -1 }, { rotateY }, { rotateX }] }}>
-      {displayItem?.abs_path ? (
-        <Image source={{ uri: 'file://' + displayItem.abs_path }} style={{ width: '100%', height: '100%' }} />
-      ) : (
-        <View style={{ width: '100%', height: '100%', backgroundColor: colors.chipBackground, justifyContent: 'center', alignItems: 'center' }}>
-          <Ionicons name="image-outline" size={24} color={colors.text} />
-        </View>
-      )}
-    </Animated.View>
-  );
-};
 
 export default function SearchScreen() {
   const { colors } = useTheme();
@@ -76,36 +22,6 @@ export default function SearchScreen() {
   const [isExclusive, setIsExclusive] = useState(true);
   const [results, setResults] = useState<any[]>([]);
   const [isSearching, setIsSearching] = useState(false);
-  const scrollViewRef = useRef<any>(null);
-  
-  const keyboardOffset = useRef(new Animated.Value(0)).current;
-
-  React.useEffect(() => {
-    const showSub = Keyboard.addListener(
-      Platform.OS === 'ios' ? 'keyboardWillShow' : 'keyboardDidShow',
-      (e) => {
-        Animated.timing(keyboardOffset, {
-          toValue: e.endCoordinates.height,
-          duration: 250,
-          useNativeDriver: false,
-        }).start();
-      }
-    );
-    const hideSub = Keyboard.addListener(
-      Platform.OS === 'ios' ? 'keyboardWillHide' : 'keyboardDidHide',
-      (e) => {
-        Animated.timing(keyboardOffset, {
-          toValue: 0,
-          duration: 250,
-          useNativeDriver: false,
-        }).start();
-      }
-    );
-    return () => {
-      showSub.remove();
-      hideSub.remove();
-    };
-  }, []);
 
   const scrollY = useRef(new Animated.Value(0)).current;
   const headerHeight = 70; // Distance to scroll up before header fully reveals
@@ -131,15 +47,11 @@ export default function SearchScreen() {
 
   const handleSearch = async () => {
     if (!searchQuery.trim()) return;
-    
-    // Jump back to the bottom (origin) for the new search
-    scrollViewRef.current?.scrollTo({ y: 0, animated: true });
-    
     setIsSearching(true);
     try {
       const jsonRes = await searchImages(searchQuery);
-      const parsedResults = JSON.parse(jsonRes);
-      setResults(Array.isArray(parsedResults) ? parsedResults : []);
+      console.log('RAW SEARCH RESULT:', jsonRes);
+      setResults(JSON.parse(jsonRes));
     } catch (e) {
       console.error('SEARCH ERROR:', e);
     } finally {
@@ -166,31 +78,24 @@ export default function SearchScreen() {
     <View
       style={[styles.container, { backgroundColor: colors.background }]}
     >
-      <View style={[styles.header, { position: 'absolute', top: 50, left: 20, right: 20, zIndex: 10 }]}>
+      <Animated.View style={[styles.header, { position: 'absolute', top: 50, left: 20, right: 20, zIndex: 10, transform: [{ translateY }] }]}>
         {results.length > 0 || isSearching ? (
-          <TouchableOpacity style={[styles.iconButton, { backgroundColor: 'rgba(0,0,0,0.6)' }]} onPress={() => {
+          <TouchableOpacity style={[styles.iconButton, { backgroundColor: colors.iconBackground }]} onPress={() => {
             setSearchQuery('');
             setResults([]);
           }}>
-            <Ionicons name="chevron-back" size={24} color="#ffffff" />
+            <Ionicons name="chevron-back" size={24} color={colors.iconColor} />
           </TouchableOpacity>
         ) : (
           <View style={{ width: 40, height: 40 }} />
         )}
-        
-        <Text style={{ color: '#ffffff', fontSize: 20, fontWeight: 'bold' }}>
-          {results.length > 0 ? `${results.length} Results` : 'Search'}
-        </Text>
-
-        <TouchableOpacity style={[styles.iconButton, { backgroundColor: 'rgba(0,0,0,0.6)' }]} onPress={() => navigation.navigate('Settings')}>
-          <Ionicons name="settings-sharp" size={20} color="#ffffff" />
+        <TouchableOpacity style={[styles.iconButton, { backgroundColor: colors.iconBackground }]} onPress={() => navigation.navigate('Settings')}>
+          <Ionicons name="settings-sharp" size={20} color={colors.iconColor} />
         </TouchableOpacity>
-      </View>
+      </Animated.View>
 
       <Animated.ScrollView
-        ref={scrollViewRef}
-        style={{ transform: [{ scaleY: -1 }] }}
-        contentContainerStyle={{ flexGrow: 1, paddingTop: 180, paddingBottom: 105 }}
+        contentContainerStyle={{ flexGrow: 1, paddingTop: 105, paddingBottom: 20, paddingHorizontal: 20 }}
         keyboardShouldPersistTaps="handled"
         showsVerticalScrollIndicator={false}
         onScroll={Animated.event(
@@ -199,41 +104,43 @@ export default function SearchScreen() {
         )}
         scrollEventThrottle={16}
       >
-        {/* Search Results List */}
-        <View style={{ flex: 1 }}>
-          {results.length === 0 && !isSearching ? (
-            <View style={{ flex: 1, justifyContent: 'center', alignItems: 'center', marginTop: '40%', transform: [{ scaleY: -1 }] }}>
-              <Ionicons name="images-outline" size={64} color="#8e8e93" />
-              <Text style={{ color: colors.text, fontSize: 20, fontWeight: 'bold', marginTop: 20 }}>Search your photos</Text>
-              <Text style={{ color: '#8e8e93', fontSize: 14, marginTop: 8 }}>Results will appear here in a grid</Text>
-            </View>
-          ) : (
-            <View style={{ flexDirection: 'row', flexWrap: 'wrap' }}>
-              {results.map((item, index) => (
-                <StaggeredResultItem key={index} item={item} index={index} colors={colors} />
-              ))}
-            </View>
-          )}
+        <Text style={[styles.title, { color: colors.text }]}>Search</Text>
 
-          {isSearching && (
-            <View style={{ position: 'absolute', top: 0, left: 0, right: 0, bottom: 0, justifyContent: 'center', alignItems: 'center', backgroundColor: 'rgba(0,0,0,0.3)', transform: [{ scaleY: -1 }] }}>
+        {/* Search Results List */}
+        <View style={{ flex: 1, marginTop: 10 }}>
+          {isSearching ? (
+            <View style={{ flex: 1, justifyContent: 'center', alignItems: 'center' }}>
               <ActivityIndicator size="large" color={colors.primary} />
             </View>
+          ) : (
+            results.map((item, index) => (
+              <View key={index} style={styles.resultItem}>
+                <View style={styles.resultImageContainer}>
+                  {/* Fallback to icon if path is empty, otherwise show image */}
+                  {item.abs_path ? (
+                    <Image source={{ uri: 'file://' + item.abs_path }} style={styles.resultImage} />
+                  ) : (
+                    <View style={[styles.resultImagePlaceholder, { backgroundColor: colors.chipBackground }]}>
+                      <Ionicons name="image-outline" size={24} color={colors.text} />
+                    </View>
+                  )}
+                </View>
+                <View style={styles.resultDetails}>
+                  <Text style={[styles.resultTitle, { color: colors.text }]} numberOfLines={1}>{item.display_name || (item.abs_path ? item.abs_path.split('/').pop() : 'Unknown File')}</Text>
+
+                  <View style={styles.resultFooter}>
+                    <Text style={styles.resultDate}>{formatDate(item.mtime_unix)}</Text>
+                    <Text style={[styles.resultSize, { color: colors.text }]}>{formatBytes(item.size_bytes)}</Text>
+                  </View>
+                </View>
+              </View>
+            ))
           )}
         </View>
       </Animated.ScrollView>
 
       {/* Filters Section */}
-      <Animated.View style={[styles.bottomSection, { 
-        position: 'absolute', 
-        bottom: keyboardOffset, 
-        left: 0, 
-        right: 0, 
-        zIndex: 10,
-        backgroundColor: 'transparent', 
-        paddingHorizontal: 20, 
-        paddingBottom: Platform.OS === 'ios' ? 30 : 20 
-      }]}>
+      <View style={[styles.bottomSection, { paddingHorizontal: 20, paddingBottom: Platform.OS === 'ios' ? 30 : 20 }]}>
         {/* Row 1 */}
         <View style={styles.filterRow}>
           {filters.slice(0, 2).map((filter) => (
@@ -241,21 +148,22 @@ export default function SearchScreen() {
               key={filter.id}
               style={[
                 styles.chip,
-                { backgroundColor: filter.active ? '#e5e5ea' : colors.chipBackground }
+                { backgroundColor: filter.active ? colors.chipActiveBackground : colors.chipBackground }
               ]}
               onPress={() => toggleFilter(filter.id)}
             >
+              {filter.active ? (
+                <Ionicons name="checkmark" size={14} color={colors.chipActiveText} style={styles.chipIcon} />
+              ) : null}
               <Text style={[
                 styles.chipText,
-                { color: filter.active ? '#1c1c1e' : colors.chipText }
+                { color: filter.active ? colors.chipActiveText : colors.chipText }
               ]}>
                 {filter.label}
               </Text>
-              {filter.active ? (
-                <Ionicons name="checkmark" size={14} color="#1c1c1e" style={styles.chipIconRight} />
-              ) : (
+              {!filter.active ? (
                 <Ionicons name="close" size={14} color={colors.chipText} style={styles.chipIconRight} />
-              )}
+              ) : null}
             </TouchableOpacity>
           ))}
         </View>
@@ -268,21 +176,22 @@ export default function SearchScreen() {
                 key={filter.id}
                 style={[
                   styles.chip,
-                  { backgroundColor: filter.active ? '#e5e5ea' : colors.chipBackground }
+                  { backgroundColor: filter.active ? colors.chipActiveBackground : colors.chipBackground }
                 ]}
                 onPress={() => toggleFilter(filter.id)}
               >
+                {filter.active ? (
+                  <Ionicons name="checkmark" size={14} color={colors.chipActiveText} style={styles.chipIcon} />
+                ) : null}
                 <Text style={[
                   styles.chipText,
-                  { color: filter.active ? '#1c1c1e' : colors.chipText }
+                  { color: filter.active ? colors.chipActiveText : colors.chipText }
                 ]}>
                   {filter.label}
                 </Text>
-                {filter.active ? (
-                  <Ionicons name="checkmark" size={14} color="#1c1c1e" style={styles.chipIconRight} />
-                ) : (
+                {!filter.active ? (
                   <Ionicons name="close" size={14} color={colors.chipText} style={styles.chipIconRight} />
-                )}
+                ) : null}
               </TouchableOpacity>
             ))}
           </View>
@@ -308,7 +217,7 @@ export default function SearchScreen() {
             returnKeyType="search"
           />
         </View>
-      </Animated.View>
+      </View>
     </View>
   );
 }
@@ -355,7 +264,7 @@ const styles = StyleSheet.create({
     alignItems: 'center',
     paddingVertical: 6,
     paddingHorizontal: 12,
-    borderRadius: 20,
+    borderRadius: 8,
     marginRight: 10,
   },
   chipIcon: {
@@ -374,7 +283,7 @@ const styles = StyleSheet.create({
   searchContainer: {
     flexDirection: 'row',
     alignItems: 'center',
-    borderRadius: 30,
+    borderRadius: 20,
     paddingHorizontal: 15,
     paddingVertical: 8,
     marginTop: -11,

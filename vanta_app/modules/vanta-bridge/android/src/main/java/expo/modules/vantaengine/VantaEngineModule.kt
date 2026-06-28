@@ -56,12 +56,6 @@ class VantaEngineModule : Module() {
         query: String
     ): String
 
-    private external fun getTopEntitiesNative(dbPath: String): String
-    private external fun getBestFaceCropNative(dbPath: String, entityId: Long): String
-    private external fun setEntityNameNative(dbPath: String, entityId: Long, name: String): Boolean
-    private external fun getEntityNeighborsNative(dbPath: String, entityId: Long): String
-    private external fun getEntityFilesNative(dbPath: String, entityId: Long): String
-
     private fun extractAssetsIfNeeded(context: android.content.Context) {
         val modelsDir = java.io.File(context.filesDir, "VantaModels")
         if (!modelsDir.exists()) {
@@ -270,18 +264,18 @@ class VantaEngineModule : Module() {
                 return@AsyncFunction
             }
 
-            // Start Foreground Service to keep process alive and do the actual work
-            val serviceIntent = android.content.Intent(context, IndexingService::class.java).apply {
-                action = IndexingService.ACTION_START
-                putExtra("dbPath", dbFile.absolutePath)
-            }
-            if (android.os.Build.VERSION.SDK_INT >= android.os.Build.VERSION_CODES.O) {
-                context.startForegroundService(serviceIntent)
-            } else {
-                context.startService(serviceIntent)
-            }
+            Thread {
+                try {
+                    // Extract models from assets to internal storage so C++ can read them
+                    extractAssetsIfNeeded(context)
 
-            promise.resolve(true)
+                    // Run embedding generation natively
+                    val success = generateEmbeddingsNative(dbFile.absolutePath)
+                    promise.resolve(success)
+                } catch (e: Exception) {
+                    promise.reject("ERR", e.message, e)
+                }
+            }.start()
         }
 
         AsyncFunction("getIndexProgress") {
@@ -329,46 +323,6 @@ class VantaEngineModule : Module() {
                     promise.reject("ERR", e.message, e)
                 }
             }.start()
-        }
-
-        AsyncFunction("getTopEntities") {
-            val context = appContext.reactContext
-                ?: throw IllegalStateException("Android context unavailable")
-            val dbFile = context.getDatabasePath("vanta.db")
-            if (!dbFile.exists()) return@AsyncFunction "[]"
-            getTopEntitiesNative(dbFile.absolutePath)
-        }
-
-        AsyncFunction("getBestFaceCrop") { entityId: Double ->
-            val context = appContext.reactContext
-                ?: throw IllegalStateException("Android context unavailable")
-            val dbFile = context.getDatabasePath("vanta.db")
-            if (!dbFile.exists()) return@AsyncFunction "{}"
-            getBestFaceCropNative(dbFile.absolutePath, entityId.toLong())
-        }
-
-        AsyncFunction("setEntityName") { entityId: Double, name: String ->
-            val context = appContext.reactContext
-                ?: throw IllegalStateException("Android context unavailable")
-            val dbFile = context.getDatabasePath("vanta.db")
-            if (!dbFile.exists()) return@AsyncFunction false
-            setEntityNameNative(dbFile.absolutePath, entityId.toLong(), name)
-        }
-
-        AsyncFunction("getEntityNeighbors") { entityId: Double ->
-            val context = appContext.reactContext
-                ?: throw IllegalStateException("Android context unavailable")
-            val dbFile = context.getDatabasePath("vanta.db")
-            if (!dbFile.exists()) return@AsyncFunction "[]"
-            getEntityNeighborsNative(dbFile.absolutePath, entityId.toLong())
-        }
-
-        AsyncFunction("getEntityFiles") { entityId: Double ->
-            val context = appContext.reactContext
-                ?: throw IllegalStateException("Android context unavailable")
-            val dbFile = context.getDatabasePath("vanta.db")
-            if (!dbFile.exists()) return@AsyncFunction "[]"
-            getEntityFilesNative(dbFile.absolutePath, entityId.toLong())
         }
     }
 }
