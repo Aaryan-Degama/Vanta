@@ -80,7 +80,7 @@ class IndexingService : Service() {
         val modelsDir = java.io.File(context.filesDir, "VantaModels")
         if (!modelsDir.exists()) modelsDir.mkdirs()
 
-        val filesToCopy = listOf("clip_image_fp16.onnx", "clip_text_fp16.onnx", "vocab.json", "merges.txt")
+        val filesToCopy = listOf("clip_image_fp16.onnx", "clip_text_fp16.onnx", "vocab.json", "merges.txt", "det_500m.onnx", "w600k_mbf.onnx")
         for (fileName in filesToCopy) {
             val file = java.io.File(modelsDir, fileName)
             if (!file.exists()) {

@@ -6,6 +6,8 @@ import { ThemeProvider, useTheme } from './ThemeContext';
 import SearchScreen from './screens/SearchScreen';
 import SettingsScreen from './screens/SettingsScreen';
 import DebugScreen from './screens/DebugScreen';
+import { PeopleScreen } from './screens/PeopleScreen';
+import { EntityDetailScreen } from './screens/EntityDetailScreen';
 
 const Stack = createNativeStackNavigator();
 
@@ -25,6 +27,8 @@ function RootNavigator() {
         <Stack.Screen name="Search" component={SearchScreen} />
         <Stack.Screen name="Settings" component={SettingsScreen} />
         <Stack.Screen name="Debug" component={DebugScreen} options={{ headerShown: true, title: 'Developer' }} />
+        <Stack.Screen name="People" component={PeopleScreen} options={{ headerShown: true, title: 'People' }} />
+        <Stack.Screen name="EntityDetail" component={EntityDetailScreen} options={{ headerShown: true, title: 'Details' }} />
       </Stack.Navigator>
     </NavigationContainer>
   );

@@ -1,5 +1,6 @@
 import React, { useEffect, useState } from 'react';
 import { View, Text, FlatList, ActivityIndicator, Pressable, StyleSheet, Dimensions, Image, Modal, TextInput, Button } from 'react-native';
+import { useNavigation } from '@react-navigation/native';
 import VantaEngine from '../modules/vanta-bridge/src/VantaEngineModule';
 import { EntityMeta, FaceCrop } from '../modules/vanta-bridge/src/VantaEngine.types';
 import { useTheme } from '../ThemeContext';
@@ -42,10 +43,14 @@ const FaceCell = ({ entity, colors, onNamed }: { entity: EntityMeta; colors: any
   const displayName = entity.display_name && entity.display_name.trim() !== '' ? entity.display_name : 'Unnamed';
   const IMAGE_SIZE = CELL_WIDTH - 12;
 
+  const navigation = useNavigation<any>();
+
   const handlePress = () => {
     if (displayName === 'Unnamed') {
       setInputValue('');
       setModalVisible(true);
+    } else {
+      navigation.navigate('EntityDetail', { entity });
     }
   };
 

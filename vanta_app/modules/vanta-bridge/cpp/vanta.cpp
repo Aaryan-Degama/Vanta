@@ -9,7 +9,7 @@
 #include "Preprocessing/CLIP/CLIP_model.hpp"
 #include <atomic>
 #include "Preprocessing/CLIP/CLIP_tokenizer.hpp"
-
+#include "face_DB.hpp"
 static CLIPTokenizer* g_tokenizer = nullptr;
 
 
@@ -215,6 +215,7 @@ Java_expo_modules_vantaengine_VantaEngineModule_getStoredFilesNative(
 }
 
 static CLIP_session* g_clip_session = nullptr;
+static Face_embedding* g_face_session = nullptr;
 static std::atomic<int> g_index_processed_count(0);
 static std::atomic<int> g_index_total_count(0);
 static std::string g_current_processing_file = "";
@@ -277,6 +278,17 @@ Java_expo_modules_vantaengine_VantaEngineModule_generateEmbeddingsNative(
         }
     }
 
+    if (!g_face_session) {
+        g_face_session = new Face_embedding();
+    }
+    if (!g_face_session->is_loaded()) {
+        if (!g_face_session->load()) {
+            LOGE("Failed to load Face model");
+            sqlite3_close(db);
+            return JNI_FALSE;
+        }
+    }
+
     LOGI("Starting embedding generation...");
     int total_to_process = get_picture_count(db_path);
     int unindexed_count = get_unindexed_picture_count(db_path);
@@ -298,6 +310,13 @@ Java_expo_modules_vantaengine_VantaEngineModule_generateEmbeddingsNative(
                 std::vector<float> embedding = g_clip_session->get_embedding(clip_img);
                 
                 if (save_clip_embedding(db, img_meta.id, embedding)) {
+                    // Also run face pipeline
+                    if (run_face_pipeline(db, path, img_meta.id, *g_face_session)) {
+                        cluster_faces_for_file(db, img_meta.id);
+                    } else {
+                        LOGE("Failed to run face pipeline for %s", path.c_str());
+                    }
+
                     g_index_processed_count++;
                 } else {
                     LOGE("Failed to save embedding for %s", path.c_str());
@@ -315,7 +334,9 @@ Java_expo_modules_vantaengine_VantaEngineModule_generateEmbeddingsNative(
         LOGI("Embedding generation paused by user.");
     } else {
         g_index_status = "finished";
-        LOGI("Finished generating embeddings for all images.");
+        LOGI("Finished generating embeddings for all images. Running second pass reclustering...");
+        recluster_pending_faces(db);
+        LOGI("Second pass reclustering finished.");
     }
 
     sqlite3_close(db);
