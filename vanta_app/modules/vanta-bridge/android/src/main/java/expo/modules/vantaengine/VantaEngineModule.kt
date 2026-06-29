@@ -64,59 +64,21 @@ class VantaEngineModule : Module() {
 
     private fun extractAssetsIfNeeded(context: android.content.Context) {
         val modelsDir = java.io.File(context.filesDir, "VantaModels")
-        if (!modelsDir.exists()) {
-            modelsDir.mkdirs()
-        }
+        if (!modelsDir.exists()) modelsDir.mkdirs()
 
-        val imageModel = java.io.File(modelsDir, "clip_image_fp16.onnx")
-        if (!imageModel.exists()) {
-            try {
-                context.assets.open("VantaModels/clip_image_fp16.onnx").use { input ->
-                    java.io.FileOutputStream(imageModel).use { output ->
-                        input.copyTo(output)
+        val filesToCopy = listOf("clip_image_fp16.onnx", "clip_text_fp16.onnx", "vocab.json", "merges.txt", "det_500m.onnx", "w600k_mbf.onnx")
+        for (fileName in filesToCopy) {
+            val file = java.io.File(modelsDir, fileName)
+            if (!file.exists()) {
+                try {
+                    context.assets.open("VantaModels/$fileName").use { input ->
+                        java.io.FileOutputStream(file).use { output ->
+                            input.copyTo(output)
+                        }
                     }
+                } catch (e: Exception) {
+                    e.printStackTrace()
                 }
-            } catch (e: Exception) {
-                e.printStackTrace()
-            }
-        }
-
-        val textModel = java.io.File(modelsDir, "clip_text_fp16.onnx")
-        if (!textModel.exists()) {
-            try {
-                context.assets.open("VantaModels/clip_text_fp16.onnx").use { input ->
-                    java.io.FileOutputStream(textModel).use { output ->
-                        input.copyTo(output)
-                    }
-                }
-            } catch (e: Exception) {
-                e.printStackTrace()
-            }
-        }
-
-        val vocabFile = java.io.File(modelsDir, "vocab.json")
-        if (!vocabFile.exists()) {
-            try {
-                context.assets.open("VantaModels/vocab.json").use { input ->
-                    java.io.FileOutputStream(vocabFile).use { output ->
-                        input.copyTo(output)
-                    }
-                }
-            } catch (e: Exception) {
-                e.printStackTrace()
-            }
-        }
-
-        val mergesFile = java.io.File(modelsDir, "merges.txt")
-        if (!mergesFile.exists()) {
-            try {
-                context.assets.open("VantaModels/merges.txt").use { input ->
-                    java.io.FileOutputStream(mergesFile).use { output ->
-                        input.copyTo(output)
-                    }
-                }
-            } catch (e: Exception) {
-                e.printStackTrace()
             }
         }
     }

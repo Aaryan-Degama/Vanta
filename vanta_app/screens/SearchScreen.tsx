@@ -167,24 +167,29 @@ export default function SearchScreen() {
       style={[styles.container, { backgroundColor: colors.background }]}
     >
       <View style={[styles.header, { position: 'absolute', top: 50, left: 20, right: 20, zIndex: 10 }]}>
-        {results.length > 0 || isSearching ? (
-          <TouchableOpacity style={[styles.iconButton, { backgroundColor: 'rgba(0,0,0,0.6)' }]} onPress={() => {
-            setSearchQuery('');
-            setResults([]);
-          }}>
-            <Ionicons name="chevron-back" size={24} color="#ffffff" />
-          </TouchableOpacity>
-        ) : (
-          <View style={{ width: 40, height: 40 }} />
-        )}
+        <View style={{ width: 90, alignItems: 'flex-start' }}>
+          {(results.length > 0 || isSearching) && (
+            <TouchableOpacity style={[styles.iconButton, { backgroundColor: 'rgba(0,0,0,0.6)' }]} onPress={() => {
+              setSearchQuery('');
+              setResults([]);
+            }}>
+              <Ionicons name="chevron-back" size={24} color="#ffffff" />
+            </TouchableOpacity>
+          )}
+        </View>
         
         <Text style={{ color: '#ffffff', fontSize: 20, fontWeight: 'bold' }}>
           {results.length > 0 ? `${results.length} Results` : 'Search'}
         </Text>
 
-        <TouchableOpacity style={[styles.iconButton, { backgroundColor: 'rgba(0,0,0,0.6)' }]} onPress={() => navigation.navigate('Settings')}>
-          <Ionicons name="settings-sharp" size={20} color="#ffffff" />
-        </TouchableOpacity>
+        <View style={{ width: 90, flexDirection: 'row', justifyContent: 'flex-end' }}>
+          <TouchableOpacity style={[styles.iconButton, { backgroundColor: 'rgba(0,0,0,0.6)', marginRight: 10 }]} onPress={() => navigation.navigate('People')}>
+            <Ionicons name="people" size={20} color="#ffffff" />
+          </TouchableOpacity>
+          <TouchableOpacity style={[styles.iconButton, { backgroundColor: 'rgba(0,0,0,0.6)' }]} onPress={() => navigation.navigate('Settings')}>
+            <Ionicons name="settings-sharp" size={20} color="#ffffff" />
+          </TouchableOpacity>
+        </View>
       </View>
 
       <Animated.ScrollView

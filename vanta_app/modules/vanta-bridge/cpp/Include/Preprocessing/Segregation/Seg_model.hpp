@@ -53,8 +53,8 @@ private:
     std::vector<FaceResult> nms(std::vector<FaceResult>& proposals, float iou_threshold);
 
 
-    const std::string detector_path  = std::string(SEGREGATION_DIR) + "/.model/det_500m.onnx"; 
-    const std::string extractor_path = std::string(SEGREGATION_DIR) + "/.model/w600k_mbf.onnx";
+    const std::string detector_path  = "/data/user/0/com.aaryan_ka.VantaApp/files/VantaModels/det_500m.onnx"; 
+    const std::string extractor_path = "/data/user/0/com.aaryan_ka.VantaApp/files/VantaModels/w600k_mbf.onnx";
 public:
     bool load();
     bool unload();
