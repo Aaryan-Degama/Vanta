@@ -74,9 +74,13 @@ target_include_directories(vanta PRIVATE
 
     # Project
     ${CMAKE_CURRENT_SOURCE_DIR}/Include
+    ${CMAKE_CURRENT_SOURCE_DIR}/Include/Graph
+    ${CMAKE_CURRENT_SOURCE_DIR}/Include/Query
+    ${CMAKE_CURRENT_SOURCE_DIR}/Include/Query/Intent
+    ${CMAKE_CURRENT_SOURCE_DIR}/Include/Query/Query_processing
+    ${CMAKE_CURRENT_SOURCE_DIR}/Include/Preprocessing
     ${CMAKE_CURRENT_SOURCE_DIR}/Include/Preprocessing/Segregation
     ${CMAKE_CURRENT_SOURCE_DIR}/Include/Preprocessing/CLIP
-    ${CMAKE_CURRENT_SOURCE_DIR}/Include/Query/Query_processing
     ${CMAKE_CURRENT_SOURCE_DIR}/DB
 
     # SQLite

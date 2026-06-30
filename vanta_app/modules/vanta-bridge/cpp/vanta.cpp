@@ -5,10 +5,10 @@
 #include "DBoperations.hpp"
 #include "clip_db.hpp"
 #include "graph_db.hpp"
-#include "Query/Query_processing/query_engine.hpp"
+#include "query_engine.hpp"
 #include "CLIP_model.hpp"
 #include <atomic>
-#include "Preprocessing/CLIP/CLIP_tokenizer.hpp"
+#include "CLIP_tokenizer.hpp"
 #include "face_DB.hpp"
 static CLIPTokenizer* g_tokenizer = nullptr;
 
