@@ -11,7 +11,7 @@
 bool init_face_schema(sqlite3* db) {
     const char* ddl1 = "CREATE TABLE IF NOT EXISTS entities (entity_id INTEGER PRIMARY KEY AUTOINCREMENT, entity_type TEXT NOT NULL CHECK(entity_type IN ('person')), display_name TEXT, confidence REAL NOT NULL DEFAULT 1.0, sample_count INTEGER NOT NULL DEFAULT 0, created_at INTEGER NOT NULL, updated_at INTEGER NOT NULL)";
     const char* ddl2 = "CREATE VIRTUAL TABLE IF NOT EXISTS person_centroids USING vec0(entity_id INTEGER PRIMARY KEY, embedding FLOAT[512])";
-    const char* ddl3 = "CREATE TABLE IF NOT EXISTS face_detections (id INTEGER PRIMARY KEY AUTOINCREMENT, file_id INTEGER NOT NULL REFERENCES files(id) ON DELETE CASCADE, entity_id INTEGER REFERENCES entities(entity_id) ON DELETE SET NULL, bbox_x INTEGER NOT NULL, bbox_y INTEGER NOT NULL, bbox_w INTEGER NOT NULL, bbox_h INTEGER NOT NULL, det_score REAL NOT NULL, created_at INTEGER NOT NULL)";
+    const char* ddl3 = "CREATE TABLE IF NOT EXISTS face_detections (id INTEGER PRIMARY KEY AUTOINCREMENT, file_id INTEGER NOT NULL REFERENCES files(id) ON DELETE CASCADE, entity_id INTEGER REFERENCES entities(entity_id) ON DELETE SET NULL, bbox_x INTEGER NOT NULL, bbox_y INTEGER NOT NULL, bbox_w INTEGER NOT NULL, bbox_h INTEGER NOT NULL, det_score REAL NOT NULL, blur_score REAL NOT NULL DEFAULT 0, created_at INTEGER NOT NULL)";
     const char* ddl4 = "CREATE VIRTUAL TABLE IF NOT EXISTS face_vec USING vec0(detection_id INTEGER PRIMARY KEY, embedding FLOAT[512])";
     const char* ddl5 = "CREATE TABLE IF NOT EXISTS entity_memberships (entity_id INTEGER NOT NULL, file_id INTEGER NOT NULL, score REAL DEFAULT 1.0, created_at INTEGER NOT NULL, PRIMARY KEY (entity_id, file_id), FOREIGN KEY (entity_id) REFERENCES entities(entity_id) ON DELETE CASCADE, FOREIGN KEY (file_id) REFERENCES files(id) ON DELETE CASCADE)";
 
@@ -41,11 +41,17 @@ bool init_face_schema(sqlite3* db) {
         sqlite3_free(errMsg);
         return false;
     }
+
+    // Migration: existing DBs created before blur_score was added won't get the
+    // column from CREATE TABLE IF NOT EXISTS above, so add it explicitly here.
+    // Ignore the error if the column already exists.
+    sqlite3_exec(db, "ALTER TABLE face_detections ADD COLUMN blur_score REAL NOT NULL DEFAULT 0", nullptr, nullptr, nullptr);
+
     return true;
 }
 
 bool save_face_detection(sqlite3* db, int64_t file_id, const FaceResult& face, int64_t* out_detection_id) {
-    const char* sql = "INSERT INTO face_detections (file_id, entity_id, bbox_x, bbox_y, bbox_w, bbox_h, det_score, created_at) VALUES (?, NULL, ?, ?, ?, ?, ?, ?)";
+    const char* sql = "INSERT INTO face_detections (file_id, entity_id, bbox_x, bbox_y, bbox_w, bbox_h, det_score, blur_score, created_at) VALUES (?, NULL, ?, ?, ?, ?, ?, ?, ?)";
     sqlite3_stmt* stmt = nullptr;
     if (sqlite3_prepare_v2(db, sql, -1, &stmt, nullptr) != SQLITE_OK) {
         LOGE("Failed to prepare save_face_detection: %s", sqlite3_errmsg(db));
@@ -58,7 +64,8 @@ bool save_face_detection(sqlite3* db, int64_t file_id, const FaceResult& face, i
     sqlite3_bind_int(stmt, 4, static_cast<int>(face.bbox.width));
     sqlite3_bind_int(stmt, 5, static_cast<int>(face.bbox.height));
     sqlite3_bind_double(stmt, 6, face.confidence);
-    sqlite3_bind_int64(stmt, 7, static_cast<int64_t>(std::time(nullptr)));
+    sqlite3_bind_double(stmt, 7, face.blur_score);
+    sqlite3_bind_int64(stmt, 8, static_cast<int64_t>(std::time(nullptr)));
 
     bool success = false;
     if (sqlite3_step(stmt) == SQLITE_DONE) {
@@ -159,7 +166,7 @@ bool cluster_faces_for_file(sqlite3* db, int64_t file_id) {
     sqlite3_exec(db, "BEGIN TRANSACTION;", nullptr, nullptr, nullptr);
 
     const char* fetch_sql = R"(
-        SELECT d.id, v.embedding, d.det_score
+        SELECT d.id, v.embedding, d.det_score, d.blur_score
         FROM face_detections d
         JOIN face_vec v ON d.id = v.detection_id
         WHERE d.file_id = ? AND d.entity_id IS NULL
@@ -177,6 +184,7 @@ bool cluster_faces_for_file(sqlite3* db, int64_t file_id) {
         int64_t detection_id;
         std::vector<float> embedding;
         float det_score;
+        float blur_score;
     };
     std::vector<UnassignedFace> unassigned_faces;
 
@@ -186,6 +194,7 @@ bool cluster_faces_for_file(sqlite3* db, int64_t file_id) {
         const void* blob = sqlite3_column_blob(fetch_stmt, 1);
         int bytes = sqlite3_column_bytes(fetch_stmt, 1);
         face.det_score = static_cast<float>(sqlite3_column_double(fetch_stmt, 2));
+        face.blur_score = static_cast<float>(sqlite3_column_double(fetch_stmt, 3));
         if (blob && bytes == 512 * sizeof(float)) {
             face.embedding.resize(512);
             std::memcpy(face.embedding.data(), blob, bytes);
@@ -201,7 +210,12 @@ bool cluster_faces_for_file(sqlite3* db, int64_t file_id) {
 
     const float GOOD_THRESHOLD = 0.6f;
     const float BLURRY_THRESHOLD = 0.75f;
-    const float BLURRY_DET_SCORE_THRESHOLD = 0.5f;
+    // Variance-of-Laplacian cutoff on the aligned 112x112 crop. Faces scoring
+    // below this are treated as blurry and get the relaxed match threshold.
+    // NOTE: tune this against real blurry/sharp samples from your data - it's
+    // a starting point, not a universal constant.
+    const float BLUR_VARIANCE_THRESHOLD = 80.0f;
+
 
     sqlite3_stmt* match_stmt = nullptr;
     const char* match_sql = "SELECT entity_id, distance FROM person_centroids WHERE embedding MATCH ? AND k = 1";
@@ -252,7 +266,8 @@ bool cluster_faces_for_file(sqlite3* db, int64_t file_id) {
         }
 
         int64_t final_entity_id = -1;
-        float current_threshold = (face.det_score < BLURRY_DET_SCORE_THRESHOLD) ? BLURRY_THRESHOLD : GOOD_THRESHOLD;
+        bool is_blurry = (face.blur_score < BLUR_VARIANCE_THRESHOLD);
+        float current_threshold = is_blurry ? BLURRY_THRESHOLD : GOOD_THRESHOLD;
 
         if (best_entity_id != -1 && min_distance <= current_threshold) {
             final_entity_id = best_entity_id;
@@ -290,7 +305,7 @@ bool cluster_faces_for_file(sqlite3* db, int64_t file_id) {
                 sqlite3_clear_bindings(get_centroid_stmt);
             }
         } else {
-            if (face.det_score < BLURRY_DET_SCORE_THRESHOLD) {
+            if (is_blurry) {
                 // It's a blurry face and didn't match even with relaxed threshold.
                 // Leave entity_id as NULL to be processed in second pass.
                 continue;

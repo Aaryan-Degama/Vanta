@@ -72,6 +72,7 @@ CREATE TABLE IF NOT EXISTS face_detections (
     bbox_w      INTEGER NOT NULL,
     bbox_h      INTEGER NOT NULL,
     det_score   REAL    NOT NULL,
+    blur_score  REAL    NOT NULL DEFAULT 0,
     created_at  INTEGER NOT NULL
 );
 

@@ -337,6 +337,11 @@ Java_expo_modules_vantaengine_VantaEngineModule_generateEmbeddingsNative(
         LOGI("Finished generating embeddings for all images. Running second pass reclustering...");
         recluster_pending_faces(db);
         LOGI("Second pass reclustering finished.");
+
+        int merged = merge_duplicate_entities(db);
+        if (merged > 0) {
+            LOGI("Merged %d duplicate person entities.", merged);
+        }
     }
 
     sqlite3_close(db);

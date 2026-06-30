@@ -120,6 +120,49 @@ void Face_embedding::l2Normalize(std::vector<float>& embedding) {
     }
 }
 
+float Face_embedding::computeBlurScore(const cv::Mat& aligned_face_bgr) {
+    /*
+    Computes a sharpness score for a face crop using the variance of the Laplacian.
+
+    Input:
+        aligned_face_bgr: The aligned 112x112 face crop in BGR format (as produced
+                           during get_embedding's alignment step, before color/normalization
+                           conversion is applied for the model).
+
+    Output:
+        Returns the variance of the Laplacian response across the grayscale image.
+        Low variance (few/weak edges) -> blurry face.
+        High variance (many sharp edges) -> sharp/in-focus face.
+        Returns 0.0f if the input is empty.
+
+    Why this approach:
+        - Operating on the aligned 112x112 crop (rather than the raw detection box)
+          keeps the score scale-invariant across faces of different sizes/resolutions,
+          since every face passes through the same alignment/resize step anyway.
+        - Variance of Laplacian is a standard, cheap, no-training-required blur metric:
+          a blurry image has fewer high-frequency edges, so the second derivative
+          (Laplacian) response has low variance; a sharp image has many strong edges,
+          producing high variance.
+    */
+
+    if (aligned_face_bgr.empty()) return 0.0f;
+
+    cv::Mat gray;
+    if (aligned_face_bgr.channels() == 3) {
+        cv::cvtColor(aligned_face_bgr, gray, cv::COLOR_BGR2GRAY);
+    } else {
+        gray = aligned_face_bgr;
+    }
+
+    cv::Mat laplacian;
+    cv::Laplacian(gray, laplacian, CV_64F);
+
+    cv::Scalar mean, stddev;
+    cv::meanStdDev(laplacian, mean, stddev);
+
+    return static_cast<float>(stddev[0] * stddev[0]); // variance = stddev^2
+}
+
 bool Face_embedding::is_loaded() {
     /*
     Checks if both detector and extractor models are successfully loaded in memory
@@ -405,7 +448,7 @@ std::vector<FaceResult> Face_embedding::get_faces(const cv::Mat& image) {
     return final_results;
 }
 
-std::vector<std::vector<float>> Face_embedding::get_embedding(const cv::Mat& image, const std::vector<FaceResult>& faces) {
+std::vector<std::vector<float>> Face_embedding::get_embedding(const cv::Mat& image, std::vector<FaceResult>& faces) {
     /*
     Extracts 512-dimensional embeddings for each detected face using the Buffalo_sc extractor model
     
@@ -461,7 +504,7 @@ std::vector<std::vector<float>> Face_embedding::get_embedding(const cv::Mat& ima
     if (!is_loaded() || image.empty() || faces.empty()) return all_embeddings;
 
 
-    for (const auto& face : faces) {
+    for (auto& face : faces) {
 
         cv::Mat src_pts(5, 2, CV_32FC1, (void*)face.keypoints.data());
         cv::Mat dst_pts(5, 2, CV_32FC1, (void*)kTargetLandmarks);
@@ -471,6 +514,10 @@ std::vector<std::vector<float>> Face_embedding::get_embedding(const cv::Mat& ima
         
         cv::Mat aligned_face;
         cv::warpAffine(image, aligned_face, transformation_matrix, cv::Size(112, 112), cv::INTER_CUBIC);
+
+        // Score sharpness on the aligned crop before any color/normalization
+        // conversion, so it reflects what the extractor model actually "sees".
+        face.blur_score = computeBlurScore(aligned_face);
 
         // Converting the RGB to BGR (OpenCV standard)
         cv::Mat rgb_face, float_face;

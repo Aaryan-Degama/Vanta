@@ -21,6 +21,10 @@ struct FaceResult {
     float confidence; 
     std::vector<cv::Point2f> keypoints; 
     std::vector<float> embedding; 
+
+    // Variance of Laplacian computed on the aligned 112x112 face crop.
+    // Lower values indicate a blurrier face. Populated by get_embedding().
+    float blur_score = -1.0f;
 };
 
 class Face_embedding {
@@ -52,6 +56,11 @@ private:
     // Core Computer Vision post-processing algorithm to filter duplicate bounding boxes
     std::vector<FaceResult> nms(std::vector<FaceResult>& proposals, float iou_threshold);
 
+    // Computes variance of Laplacian on a grayscale image as a sharpness/blur metric.
+    // Lower values = blurrier. Computed on the aligned 112x112 face crop so the
+    // scale is consistent across all faces regardless of original image resolution.
+    static float computeBlurScore(const cv::Mat& aligned_face_bgr);
+
 
     const std::string detector_path  = "/data/user/0/com.aaryan_ka.VantaApp/files/VantaModels/det_500m.onnx"; 
     const std::string extractor_path = "/data/user/0/com.aaryan_ka.VantaApp/files/VantaModels/w600k_mbf.onnx";
@@ -62,5 +71,6 @@ public:
 
     cv::Mat load_img_seg(const std::string& PATH);
     std::vector<FaceResult> get_faces(const cv::Mat& image);
-    std::vector<std::vector<float>> get_embedding(const cv::Mat& image, const std::vector<FaceResult>& faces);
+    // Note: faces is mutated in-place to populate blur_score for each face.
+    std::vector<std::vector<float>> get_embedding(const cv::Mat& image, std::vector<FaceResult>& faces);
 };
