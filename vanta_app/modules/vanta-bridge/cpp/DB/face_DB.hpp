@@ -3,7 +3,7 @@
 #include <vector>
 #include <cstdint>
 #include "sqlite3.h"
-#include "Preprocessing/Segregation/Seg_model.hpp"
+#include "Seg_model.hpp"
 
 bool init_face_schema(sqlite3* db);
 bool save_face_detection(sqlite3* db, int64_t file_id, const FaceResult& face, int64_t* out_detection_id);

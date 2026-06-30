@@ -74,6 +74,7 @@ target_include_directories(vanta PRIVATE
 
     # Project
     ${CMAKE_CURRENT_SOURCE_DIR}/Include
+    ${CMAKE_CURRENT_SOURCE_DIR}/Include/Preprocessing/Segregation
     ${CMAKE_CURRENT_SOURCE_DIR}/DB
 
     # SQLite
