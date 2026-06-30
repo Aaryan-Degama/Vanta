@@ -13,7 +13,7 @@ struct search_result {
     float distance;
 };
 
-#include "Preprocessing/CLIP/CLIP_model.hpp"
+#include "CLIP_model.hpp"
 
 // Initializes the query engine, loading any necessary text models.
 bool init_query_engine();

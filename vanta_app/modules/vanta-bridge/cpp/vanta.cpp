@@ -6,7 +6,7 @@
 #include "clip_db.hpp"
 #include "graph_db.hpp"
 #include "Query/Query_processing/query_engine.hpp"
-#include "Preprocessing/CLIP/CLIP_model.hpp"
+#include "CLIP_model.hpp"
 #include <atomic>
 #include "Preprocessing/CLIP/CLIP_tokenizer.hpp"
 #include "face_DB.hpp"
