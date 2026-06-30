@@ -1,0 +1,21 @@
+{
+  "id2label": {
+    "0": "O",
+    "1": "B-SELF",
+    "2": "I-SELF",
+    "3": "B-PERSON",
+    "4": "I-PERSON",
+    "5": "B-RELATION",
+    "6": "I-RELATION"
+  },
+  "label2id": {
+    "O": 0,
+    "B-SELF": 1,
+    "I-SELF": 2,
+    "B-PERSON": 3,
+    "I-PERSON": 4,
+    "B-RELATION": 5,
+    "I-RELATION": 6
+  },
+  "max_len": 32
+}
