@@ -1,4 +1,5 @@
 #include "query_engine.hpp"
+#include "Preprocessing/CLIP/CLIP_tokenizer.hpp"
 #include <iostream>
 #include <android/log.h>
 #define SQLITE_CORE 1
@@ -9,19 +10,50 @@
 #define LOGE(...) __android_log_print(ANDROID_LOG_ERROR, LOG_TAG, __VA_ARGS__)
 #define LOGI(...) __android_log_print(ANDROID_LOG_INFO, LOG_TAG, __VA_ARGS__)
 
+static VantaProductionAnalyzer* g_analyzer = nullptr;
+
 bool init_query_engine() {
     // In the future, this will initialize the text tokenizer and text ONNX model.
+    if (!g_analyzer) {
+        SymSpellDictionary dict;
+        std::vector<std::string> whitelist; // Can be populated with valid terms
+        g_analyzer = new VantaProductionAnalyzer(dict, whitelist);
+    }
     LOGI("Query engine initialized.");
     return true;
 }
 
-std::vector<search_result> search_images(const std::string& db_path, const std::vector<int64_t>& tokens, CLIP_session* clip_session, int top_k) {
+std::string get_corrected_query(const std::string& raw_query) {
+    if (!g_analyzer) {
+        init_query_engine();
+    }
+    QueryAnalysis analysis = g_analyzer->analyze(raw_query);
+    if (analysis.was_corrected) {
+        LOGI("Query corrected: %s -> %s", raw_query.c_str(), analysis.corrected_query.c_str());
+    }
+    return analysis.corrected_query;
+}
+
+std::vector<search_result> search_images(const std::string& db_path, const std::string& raw_query, CLIP_session* clip_session, CLIPTokenizer* tokenizer, int top_k) {
     std::vector<search_result> results;
 
     if (!clip_session || !clip_session->is_loaded()) {
         LOGE("CLIP session not loaded for text search.");
         return results;
     }
+    
+    if (!tokenizer || !tokenizer->is_loaded()) {
+        LOGE("CLIP tokenizer not loaded for text search.");
+        return results;
+    }
+
+    // Apply typo rectifier
+    std::string corrected_query = get_corrected_query(raw_query);
+    LOGI("search_images called: raw_query='%s' corrected_query='%s'", raw_query.c_str(), corrected_query.c_str());
+
+    // Tokenize
+    std::vector<int64_t> tokens = tokenizer->encode(corrected_query);
+    LOGI("Tokenized query into %zu tokens.", tokens.size());
 
     LOGI("Generating text embedding for search query...");
     std::vector<float> query_embedding;

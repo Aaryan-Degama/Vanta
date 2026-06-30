@@ -399,8 +399,6 @@ Java_expo_modules_vantaengine_VantaEngineModule_searchImagesNative(
     std::string query(query_cstr);
     env->ReleaseStringUTFChars(queryStr, query_cstr);
 
-    LOGI("searchImagesNative called: query='%s' db='%s'", query.c_str(), db_path.c_str());
-
     if (!g_clip_session) {
         g_clip_session = new CLIP_session();
     }
@@ -429,14 +427,7 @@ Java_expo_modules_vantaengine_VantaEngineModule_searchImagesNative(
         LOGI("CLIP tokenizer loaded successfully.");
     }
 
-    std::vector<int64_t> tokens = g_tokenizer->encode(query);
-    LOGI("Tokenized query into %zu tokens. First few: [%lld, %lld, %lld ...]",
-         tokens.size(),
-         tokens.size() > 0 ? (long long)tokens[0] : -1LL,
-         tokens.size() > 1 ? (long long)tokens[1] : -1LL,
-         tokens.size() > 2 ? (long long)tokens[2] : -1LL);
-
-    std::vector<search_result> results = search_images(db_path, tokens, g_clip_session);
+    std::vector<search_result> results = search_images(db_path, query, g_clip_session, g_tokenizer);
 
     LOGI("Building JSON response for %zu results", results.size());
 
