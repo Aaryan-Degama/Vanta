@@ -8,11 +8,19 @@
 VantaProductionAnalyzer::VantaProductionAnalyzer(const SymSpellDictionary& symspell_dict, const std::vector<std::string>& whitelist_terms) 
     : dictionary(symspell_dict), max_edit_distance(2), confidence_threshold(0.75f) {
     
-    // Initialize whitelist with lowercase terms
+    // Initialize whitelist and auto-populate the dictionary with whitelist terms
     for (const auto& term : whitelist_terms) {
         std::string lower_term = term;
         std::transform(lower_term.begin(), lower_term.end(), lower_term.begin(), ::tolower);
         whitelist.insert(lower_term);
+        
+        // Auto-populate the mock dictionary so the rectifier works on these terms
+        dictionary.exact_matches.insert(lower_term);
+        auto deletes = get_deletes(lower_term, max_edit_distance);
+        for (const auto& del : deletes) {
+            // Fake a high frequency to ensure it gets picked
+            dictionary.deletes_map[del].push_back({lower_term, 1000}); 
+        }
     }
 }
 

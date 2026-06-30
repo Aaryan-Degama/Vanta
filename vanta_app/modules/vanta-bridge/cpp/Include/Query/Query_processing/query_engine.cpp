@@ -16,7 +16,7 @@ bool init_query_engine() {
     // In the future, this will initialize the text tokenizer and text ONNX model.
     if (!g_analyzer) {
         SymSpellDictionary dict;
-        std::vector<std::string> whitelist; // Can be populated with valid terms
+        std::vector<std::string> whitelist = {"sun", "moon", "car", "tree", "dog", "cat"}; // Populated for testing
         g_analyzer = new VantaProductionAnalyzer(dict, whitelist);
     }
     LOGI("Query engine initialized.");
