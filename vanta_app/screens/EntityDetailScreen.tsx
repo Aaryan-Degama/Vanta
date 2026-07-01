@@ -7,6 +7,8 @@ import {
   Image,
   StyleSheet,
   ScrollView,
+  Pressable,
+  Alert,
 } from 'react-native';
 import VantaEngine from '../modules/vanta-bridge/src/VantaEngineModule';
 import {
@@ -44,12 +46,19 @@ export const EntityDetailScreen = ({ route }: { route?: RouteProps }) => {
   const [files, setFiles] = useState<EntityFile[]>([]);
   const [neighbors, setNeighbors] = useState<NeighborResult[]>([]);
   const [loading, setLoading] = useState(true);
+  const [ownerEntityId, setOwnerEntityId] = useState<number>(-1);
 
   useEffect(() => {
     let mounted = true;
 
     const fetchDetails = async () => {
       try {
+        // Load owner entity ID from native SharedPreferences
+        const ownerId = await VantaEngine.getOwnerEntityId();
+        if (mounted && ownerId > 0) {
+          setOwnerEntityId(ownerId);
+        }
+
         const [filesJson, neighborsJson] = await Promise.all([
           VantaEngine.getEntityFiles(entity.entity_id),
           VantaEngine.getEntityNeighbors(entity.entity_id),
@@ -75,6 +84,16 @@ export const EntityDetailScreen = ({ route }: { route?: RouteProps }) => {
     };
   }, [entity.entity_id]);
 
+  const handleSetOwner = async () => {
+    try {
+      await VantaEngine.setOwnerEntityId(entity.entity_id);
+      setOwnerEntityId(entity.entity_id);
+    } catch (error) {
+      console.error('Failed to set owner entity:', error);
+      Alert.alert('Error', 'Could not set owner entity.');
+    }
+  };
+
   if (loading) {
     return (
       <View style={[styles.centerContainer, { backgroundColor: colors.background }]}>
@@ -85,6 +104,7 @@ export const EntityDetailScreen = ({ route }: { route?: RouteProps }) => {
 
   const displayName =
     entity.display_name && entity.display_name.trim() !== '' ? entity.display_name : 'Unnamed';
+  const isOwner = ownerEntityId === entity.entity_id;
 
   const renderFileItem = ({ item }: { item: EntityFile }) => (
     <Image
@@ -96,7 +116,23 @@ export const EntityDetailScreen = ({ route }: { route?: RouteProps }) => {
 
   return (
     <ScrollView style={[styles.container, { backgroundColor: colors.background }]}>
-      <Text style={[styles.title, { color: colors.text }]}>{displayName}</Text>
+      <View style={styles.titleRow}>
+        <Text style={[styles.title, { color: colors.text }]}>{displayName}</Text>
+        {isOwner && (
+          <View style={[styles.ownerBadge, { backgroundColor: colors.primary + '22' }]}>
+            <Text style={[styles.ownerBadgeText, { color: colors.primary }]}>★ You</Text>
+          </View>
+        )}
+      </View>
+
+      {!isOwner && (
+        <Pressable
+          style={[styles.thisIsMeButton, { backgroundColor: colors.primary }]}
+          onPress={handleSetOwner}
+        >
+          <Text style={styles.thisIsMeText}>This is me</Text>
+        </Pressable>
+      )}
 
       <Text style={[styles.sectionHeader, { color: colors.text }]}>Photos</Text>
       <FlatList
@@ -144,11 +180,37 @@ const styles = StyleSheet.create({
     justifyContent: 'center',
     alignItems: 'center',
   },
+  titleRow: {
+    flexDirection: 'row',
+    alignItems: 'center',
+    marginHorizontal: 16,
+    marginVertical: 16,
+    gap: 10,
+  },
   title: {
     fontSize: 34,
     fontWeight: 'bold',
+  },
+  ownerBadge: {
+    paddingHorizontal: 10,
+    paddingVertical: 4,
+    borderRadius: 12,
+  },
+  ownerBadgeText: {
+    fontSize: 14,
+    fontWeight: '600',
+  },
+  thisIsMeButton: {
     marginHorizontal: 16,
-    marginVertical: 16,
+    marginBottom: 8,
+    paddingVertical: 10,
+    borderRadius: 8,
+    alignItems: 'center',
+  },
+  thisIsMeText: {
+    color: '#FFFFFF',
+    fontSize: 16,
+    fontWeight: '600',
   },
   sectionHeader: {
     fontSize: 22,
@@ -190,3 +252,4 @@ const styles = StyleSheet.create({
     marginTop: 8,
   },
 });
+

@@ -16,14 +16,37 @@ struct search_result {
 #include "CLIP_model.hpp"
 #include "typo_rectifyier.hpp"
 
+// Forward declarations
+class CLIPTokenizer;
+namespace vanta { namespace ner { class NERModel; } }
+struct EntityCandidate;
+
 // Initializes the query engine, loading any necessary text models.
 bool init_query_engine();
 
 // Corrects the query using the typo rectifier
 std::string get_corrected_query(const std::string& raw_query);
 
-// Forward declaration for tokenizer
-class CLIPTokenizer;
+// Integer Damerau-Levenshtein distance between two strings.
+int damerau_levenshtein(const std::string& s1, const std::string& s2);
+
+// Resolves a span text (e.g. "dad", "my sister") to an entity ID by fuzzy
+// matching against display_name and relation of all person entities.
+// Returns -1 if no match within edit distance 2.
+int64_t resolve_span_to_entity_id(
+    const std::string& span_text,
+    const std::vector<EntityCandidate>& candidates,
+    int64_t owner_entity_id);
 
 // Given a raw string query and database path, returns the top K similar images.
-std::vector<search_result> search_images(const std::string& db_path, const std::string& query, CLIP_session* clip_session, CLIPTokenizer* tokenizer, int top_k = 30);
+// When ner_model is non-null and loaded, uses NER span resolution + entity
+// graph routing before CLIP re-ranking.
+std::vector<search_result> search_images(
+    const std::string& db_path,
+    const std::string& raw_query,
+    CLIP_session* clip_session,
+    CLIPTokenizer* tokenizer,
+    vanta::ner::NERModel* ner_model = nullptr,
+    int64_t owner_entity_id = -1,
+    int top_k = 30);
+

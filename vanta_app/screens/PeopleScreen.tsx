@@ -34,6 +34,9 @@ const FaceCell = ({
   const [imgSize, setImgSize] = useState<{ width: number; height: number } | null>(null);
   const [modalVisible, setModalVisible] = useState(false);
   const [inputValue, setInputValue] = useState('');
+  const [relationValue, setRelationValue] = useState('');
+  const [ageValue, setAgeValue] = useState('');
+  const [locationValue, setLocationValue] = useState('');
 
   useEffect(() => {
     let mounted = true;
@@ -75,6 +78,9 @@ const FaceCell = ({
   const handlePress = () => {
     if (displayName === 'Unnamed') {
       setInputValue('');
+      setRelationValue('');
+      setAgeValue('');
+      setLocationValue('');
       setModalVisible(true);
     } else {
       navigation.navigate('EntityDetail', { entity });
@@ -82,17 +88,24 @@ const FaceCell = ({
   };
 
   const handleConfirm = async () => {
-    if (inputValue.trim() === '') return;
+    if (inputValue.trim() === '' || relationValue.trim() === '') return;
     try {
-      const success = await VantaEngine.setEntityName(entity.entity_id, inputValue.trim());
+      const ageNum = ageValue.trim() !== '' ? parseInt(ageValue, 10) : 0;
+      const success = await VantaEngine.setEntityMetadata(
+        entity.entity_id,
+        inputValue.trim(),
+        relationValue.trim(),
+        isNaN(ageNum) ? 0 : ageNum,
+        locationValue.trim()
+      );
       if (success) {
         onNamed(entity.entity_id, inputValue.trim());
         setModalVisible(false);
       } else {
-        console.error('Failed to set entity name');
+        console.error('Failed to set entity metadata');
       }
     } catch (error) {
-      console.error('Error setting entity name', error);
+      console.error('Error setting entity metadata', error);
     }
   };
 
@@ -146,11 +159,33 @@ const FaceCell = ({
             {imageContent}
             <TextInput
               style={[styles.input, { color: colors.text, borderColor: colors.border }]}
-              placeholder="Enter name..."
+              placeholder="Name (required)"
               placeholderTextColor={colors.text + '80'}
               value={inputValue}
               onChangeText={setInputValue}
               autoFocus
+            />
+            <TextInput
+              style={[styles.input, { color: colors.text, borderColor: colors.border }]}
+              placeholder="Relation (e.g. father, friend, sister)"
+              placeholderTextColor={colors.text + '80'}
+              value={relationValue}
+              onChangeText={setRelationValue}
+            />
+            <TextInput
+              style={[styles.input, { color: colors.text, borderColor: colors.border }]}
+              placeholder="Age (optional)"
+              placeholderTextColor={colors.text + '80'}
+              value={ageValue}
+              onChangeText={setAgeValue}
+              keyboardType="numeric"
+            />
+            <TextInput
+              style={[styles.input, { color: colors.text, borderColor: colors.border }]}
+              placeholder="Location (optional)"
+              placeholderTextColor={colors.text + '80'}
+              value={locationValue}
+              onChangeText={setLocationValue}
             />
             <View style={styles.modalButtons}>
               <Button title="Cancel" color={colors.text} onPress={handleCancel} />

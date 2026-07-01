@@ -9,6 +9,7 @@ package expo.modules.vantaengine
 
 // Android Context and logging used throughout the module.
 import android.content.Context
+import android.content.SharedPreferences
 import android.util.Log
 
 // Permission APIs used for pre-scan logging.
@@ -100,6 +101,25 @@ class VantaEngineModule : Module() {
      */
     private external fun getEntityFilesNative(dbPath: String, entityId: Long): String
 
+    /**
+     * Sets metadata (name, relation, age, location) on a face entity.
+     */
+    private external fun setEntityMetadataNative(
+        dbPath: String, entityId: Long,
+        name: String, relation: String,
+        age: Int, location: String
+    ): Boolean
+
+    /**
+     * Returns full metadata for a face entity as JSON.
+     */
+    private external fun getEntityMetadataNative(dbPath: String, entityId: Long): String
+
+    /**
+     * Sets the owner entity ID in the C++ layer (used for SELF span resolution).
+     */
+    private external fun setOwnerEntityIdNative(entityId: Long)
+
     //endregion
 
     /**
@@ -118,7 +138,10 @@ class VantaEngineModule : Module() {
             "vocab.json",
             "merges.txt",
             "det_500m.onnx",
-            "w600k_mbf.onnx"
+            "w600k_mbf.onnx",
+            "ner_model.onnx",
+            "ner_vocab.txt",
+            "label_map.json"
         )
 
         for (fileName in filesToCopy) {
@@ -155,6 +178,13 @@ class VantaEngineModule : Module() {
 
             extractAssetsIfNeeded(context)
             setModelsDirNative(VantaEngineConfig.getModelsDirectory(context))
+
+            // Restore owner entity ID from SharedPreferences and propagate to C++.
+            val prefs = context.getSharedPreferences("vanta_prefs", Context.MODE_PRIVATE)
+            val ownerId = prefs.getLong("owner_entity_id", -1L)
+            if (ownerId != -1L) {
+                setOwnerEntityIdNative(ownerId)
+            }
         }
 
         // Main entry point for scanning and storing files.
@@ -329,6 +359,50 @@ class VantaEngineModule : Module() {
             if (!java.io.File(dbPath).exists()) return@AsyncFunction "[]"
 
             getEntityFilesNative(dbPath, entityId.toLong())
+        }
+
+        // ── NER pipeline: entity metadata + owner entity ──
+
+        AsyncFunction("setEntityMetadata") { entityId: Double, name: String, relation: String, age: Double, location: String ->
+            val context = appContext.reactContext
+                ?: throw IllegalStateException("Android context unavailable")
+
+            val dbPath = VantaEngineConfig.getDatabasePath(context)
+            if (!java.io.File(dbPath).exists()) return@AsyncFunction false
+
+            setEntityMetadataNative(dbPath, entityId.toLong(), name, relation, age.toInt(), location)
+        }
+
+        AsyncFunction("getEntityMetadata") { entityId: Double ->
+            val context = appContext.reactContext
+                ?: throw IllegalStateException("Android context unavailable")
+
+            val dbPath = VantaEngineConfig.getDatabasePath(context)
+            if (!java.io.File(dbPath).exists()) return@AsyncFunction "{}"
+
+            getEntityMetadataNative(dbPath, entityId.toLong())
+        }
+
+        AsyncFunction("setOwnerEntityId") { entityId: Double ->
+            val context = appContext.reactContext
+                ?: throw IllegalStateException("Android context unavailable")
+
+            val eid = entityId.toLong()
+
+            // Persist to SharedPreferences
+            val prefs = context.getSharedPreferences("vanta_prefs", Context.MODE_PRIVATE)
+            prefs.edit().putLong("owner_entity_id", eid).apply()
+
+            // Propagate to C++ global
+            setOwnerEntityIdNative(eid)
+        }
+
+        AsyncFunction("getOwnerEntityId") {
+            val context = appContext.reactContext
+                ?: throw IllegalStateException("Android context unavailable")
+
+            val prefs = context.getSharedPreferences("vanta_prefs", Context.MODE_PRIVATE)
+            prefs.getLong("owner_entity_id", -1L)
         }
     }
 

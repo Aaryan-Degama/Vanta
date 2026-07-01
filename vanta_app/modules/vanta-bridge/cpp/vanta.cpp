@@ -14,8 +14,11 @@
 #include "CLIP_model.hpp"
 #include "CLIP_tokenizer.hpp"
 #include "face_DB.hpp"
+#include "ner.hpp"
 
 static CLIPTokenizer* g_tokenizer = nullptr;
+static vanta::ner::NERModel* g_ner_model = nullptr;
+static int64_t g_owner_entity_id = -1;
 
 // Guards all global model/session state so indexing and search cannot race
 // while creating or loading sessions.
@@ -471,7 +474,37 @@ Java_expo_modules_vantaengine_VantaEngineModule_searchImagesNative(
         LOGI("CLIP tokenizer loaded successfully.");
     }
 
-    std::vector<search_result> results = search_images(db_path, query, g_clip_session, g_tokenizer);
+    // Lazy-init NER model (mutex-protected, same pattern as CLIP)
+    {
+        std::lock_guard<std::mutex> lock(g_session_mutex);
+
+        if (!g_ner_model) {
+            g_ner_model = new vanta::ner::NERModel();
+        }
+
+        if (!g_ner_model->is_loaded()) {
+            const VantaConfig& cfg = VantaConfig::instance();
+            std::string ner_model_path = cfg.model_path("ner_model.onnx");
+            std::string ner_vocab_path = cfg.model_path("ner_vocab.txt");
+            std::string ner_label_path = cfg.model_path("label_map.json");
+            if (!g_ner_model->load(ner_model_path, ner_vocab_path, ner_label_path)) {
+                LOGE("Failed to load NER model (non-fatal, search will skip NER)");
+                // Non-fatal: search falls back to global KNN
+            }
+        }
+    }
+
+    vanta::ner::NERModel* ner_ptr = nullptr;
+    {
+        std::lock_guard<std::mutex> lock(g_session_mutex);
+        if (g_ner_model && g_ner_model->is_loaded()) {
+            ner_ptr = g_ner_model;
+        }
+    }
+
+    std::vector<search_result> results = search_images(
+        db_path, query, g_clip_session, g_tokenizer,
+        ner_ptr, g_owner_entity_id);
 
     LOGI("Building JSON response for %zu results", results.size());
 
@@ -680,4 +713,103 @@ Java_expo_modules_vantaengine_VantaEngineModule_getEntityFilesNative(
     json += "]";
 
     return env->NewStringUTF(json.c_str());
+}
+
+// ── NER pipeline: Entity metadata + Owner entity JNI ──
+
+extern "C" JNIEXPORT jboolean JNICALL
+Java_expo_modules_vantaengine_VantaEngineModule_setEntityMetadataNative(
+    JNIEnv* env,
+    jobject /* this */,
+    jstring dbPath,
+    jlong entityId,
+    jstring name,
+    jstring relation,
+    jint age,
+    jstring location) {
+
+    if (dbPath == nullptr || name == nullptr) return JNI_FALSE;
+
+    const char* db_path_cstr = env->GetStringUTFChars(dbPath, nullptr);
+    std::string db_path(db_path_cstr);
+    env->ReleaseStringUTFChars(dbPath, db_path_cstr);
+
+    const char* name_cstr = env->GetStringUTFChars(name, nullptr);
+    std::string entity_name(name_cstr);
+    env->ReleaseStringUTFChars(name, name_cstr);
+
+    std::string entity_relation;
+    if (relation != nullptr) {
+        const char* rel_cstr = env->GetStringUTFChars(relation, nullptr);
+        entity_relation = rel_cstr;
+        env->ReleaseStringUTFChars(relation, rel_cstr);
+    }
+
+    std::string entity_location;
+    if (location != nullptr) {
+        const char* loc_cstr = env->GetStringUTFChars(location, nullptr);
+        entity_location = loc_cstr;
+        env->ReleaseStringUTFChars(location, loc_cstr);
+    }
+
+    sqlite3* db = nullptr;
+    if (sqlite3_open_v2(db_path.c_str(), &db, SQLITE_OPEN_READWRITE, nullptr) != SQLITE_OK) {
+        LOGE("Failed to open DB for setEntityMetadataNative: %s", sqlite3_errmsg(db));
+        if (db) sqlite3_close(db);
+        return JNI_FALSE;
+    }
+
+    bool success = set_entity_metadata(db, static_cast<int64_t>(entityId),
+                                       entity_name, entity_relation,
+                                       static_cast<int>(age), entity_location);
+
+    sqlite3_close(db);
+    return success ? JNI_TRUE : JNI_FALSE;
+}
+
+extern "C" JNIEXPORT jstring JNICALL
+Java_expo_modules_vantaengine_VantaEngineModule_getEntityMetadataNative(
+    JNIEnv* env,
+    jobject /* this */,
+    jstring dbPath,
+    jlong entityId) {
+
+    if (dbPath == nullptr) return env->NewStringUTF("{}");
+
+    const char* db_path_cstr = env->GetStringUTFChars(dbPath, nullptr);
+    std::string db_path(db_path_cstr);
+    env->ReleaseStringUTFChars(dbPath, db_path_cstr);
+
+    sqlite3* db = nullptr;
+    if (sqlite3_open_v2(db_path.c_str(), &db, SQLITE_OPEN_READONLY, nullptr) != SQLITE_OK) {
+        LOGE("Failed to open DB for getEntityMetadataNative: %s", sqlite3_errmsg(db));
+        if (db) sqlite3_close(db);
+        return env->NewStringUTF("{}");
+    }
+
+    EntityMetadata meta = get_entity_metadata(db, static_cast<int64_t>(entityId));
+
+    sqlite3_close(db);
+
+    std::string json = "{" +
+        json_number_field("entity_id", meta.entity_id) + "," +
+        json_string_field("display_name", meta.display_name) + "," +
+        json_string_field("relation", meta.relation) + "," +
+        json_number_field("age", meta.age) + "," +
+        json_string_field("location", meta.location) + "," +
+        json_number_field("sample_count", meta.sample_count) + "," +
+        json_number_field("confidence", meta.confidence) +
+        "}";
+
+    return env->NewStringUTF(json.c_str());
+}
+
+extern "C" JNIEXPORT void JNICALL
+Java_expo_modules_vantaengine_VantaEngineModule_setOwnerEntityIdNative(
+    JNIEnv* env,
+    jobject /* this */,
+    jlong entityId) {
+
+    g_owner_entity_id = static_cast<int64_t>(entityId);
+    LOGI("Owner entity ID set to: %ld", (long)g_owner_entity_id);
 }

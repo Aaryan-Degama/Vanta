@@ -51,6 +51,24 @@ declare class VantaEngineModule extends NativeModule<Record<string, never>> {
 
   // Returns files associated with the entity as a JSON string.
   getEntityFiles(entityId: number): Promise<string>;
+
+  // Sets metadata (name, relation, age, location) on a face entity.
+  setEntityMetadata(
+    entityId: number,
+    name: string,
+    relation: string,
+    age: number,
+    location: string
+  ): Promise<boolean>;
+
+  // Returns full metadata for a face entity as a JSON string.
+  getEntityMetadata(entityId: number): Promise<string>;
+
+  // Sets the owner entity ID (the user's own face).
+  setOwnerEntityId(entityId: number): Promise<void>;
+
+  // Returns the current owner entity ID (-1 if not set).
+  getOwnerEntityId(): Promise<number>;
 }
 
 // `requireNativeModule` resolves the platform-specific implementation at runtime.

@@ -26,3 +26,13 @@ export type EntityFile = {
   file_id: number;
   abs_path: string;
 };
+
+export type EntityMetadata = {
+  entity_id: number;
+  display_name: string;
+  relation: string;
+  age: number;
+  location: string;
+  sample_count: number;
+  confidence: number;
+};
