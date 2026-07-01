@@ -132,9 +132,9 @@ Java_expo_modules_vantaengine_VantaEngineModule_setModelsDirNative(
 **Name breakdown:**
 ```
 Java_expo_modules_vantaengine_VantaEngineModule_setModelsDirNative
-│    └──────────────┬──────────────┘ └──────────┬──────────┘ └──────┬──────┘
-│           package with underscores          class name      method name
-│           (expo.modules.vantaengine)   (VantaEngineModule)  (setModelsDirNative)
+│    └──────────────┬───────┘ └──────────┬────┘ └──────┬──────┘
+│      package with underscores       class name    method name
+│(expo.modules.vantaengine)   (VantaEngineModule)  (setModelsDirNative)
 ```
 
 > **Rule:** Replace `.` with `_` in package names. If the class name contains `_`, it becomes `_1` (escape sequence).

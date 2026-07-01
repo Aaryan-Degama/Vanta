@@ -353,6 +353,7 @@ Java_expo_modules_vantaengine_VantaEngineModule_generateEmbeddingsNative(
                     // Also run face pipeline
                     if (run_face_pipeline(db, path, img_meta.id, *g_face_session)) {
                         cluster_faces_for_file(db, img_meta.id);
+                        update_graph_for_file(db, img_meta.id);
                     } else {
                         LOGE("Failed to run face pipeline for %s", path.c_str());
                     }

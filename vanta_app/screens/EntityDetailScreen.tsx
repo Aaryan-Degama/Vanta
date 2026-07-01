@@ -9,6 +9,9 @@ import {
   ScrollView,
   Pressable,
   Alert,
+  Modal,
+  TextInput,
+  Button,
 } from 'react-native';
 import VantaEngine from '../modules/vanta-bridge/src/VantaEngineModule';
 import {
@@ -47,6 +50,14 @@ export const EntityDetailScreen = ({ route }: { route?: RouteProps }) => {
   const [neighbors, setNeighbors] = useState<NeighborResult[]>([]);
   const [loading, setLoading] = useState(true);
   const [ownerEntityId, setOwnerEntityId] = useState<number>(-1);
+
+  // Naming Modal State
+  const [modalVisible, setModalVisible] = useState(false);
+  const [inputValue, setInputValue] = useState(entity.display_name === 'Unnamed' ? '' : entity.display_name);
+  const [relationValue, setRelationValue] = useState('');
+  const [ageValue, setAgeValue] = useState('');
+  const [locationValue, setLocationValue] = useState('');
+  const [currentName, setCurrentName] = useState(entity.display_name);
 
   useEffect(() => {
     let mounted = true;
@@ -103,8 +114,31 @@ export const EntityDetailScreen = ({ route }: { route?: RouteProps }) => {
   }
 
   const displayName =
-    entity.display_name && entity.display_name.trim() !== '' ? entity.display_name : 'Unnamed';
+    currentName && currentName.trim() !== '' ? currentName : 'Unnamed';
   const isOwner = ownerEntityId === entity.entity_id;
+
+  const handleConfirmName = async () => {
+    if (inputValue.trim() === '' || relationValue.trim() === '') return;
+    try {
+      const ageNum = ageValue.trim() !== '' ? parseInt(ageValue, 10) : 0;
+      const success = await VantaEngine.setEntityMetadata(
+        entity.entity_id,
+        inputValue.trim(),
+        relationValue.trim(),
+        isNaN(ageNum) ? 0 : ageNum,
+        locationValue.trim()
+      );
+      if (success) {
+        setCurrentName(inputValue.trim());
+        setModalVisible(false);
+      } else {
+        Alert.alert('Error', 'Failed to save details.');
+      }
+    } catch (error) {
+      console.error('Error setting entity metadata', error);
+      Alert.alert('Error', 'An error occurred.');
+    }
+  };
 
   const renderFileItem = ({ item }: { item: EntityFile }) => (
     <Image
@@ -118,6 +152,9 @@ export const EntityDetailScreen = ({ route }: { route?: RouteProps }) => {
     <ScrollView style={[styles.container, { backgroundColor: colors.background }]}>
       <View style={styles.titleRow}>
         <Text style={[styles.title, { color: colors.text }]}>{displayName}</Text>
+        <Pressable onPress={() => setModalVisible(true)} style={[styles.editButton, { backgroundColor: colors.surface }]}>
+          <Text style={{ color: colors.primary, fontWeight: 'bold' }}>Edit</Text>
+        </Pressable>
         {isOwner && (
           <View style={[styles.ownerBadge, { backgroundColor: colors.primary + '22' }]}>
             <Text style={[styles.ownerBadgeText, { color: colors.primary }]}>★ You</Text>
@@ -167,6 +204,48 @@ export const EntityDetailScreen = ({ route }: { route?: RouteProps }) => {
           <Text style={[styles.emptyText, { color: colors.text + '99' }]}>No people found</Text>
         )}
       </View>
+
+      <Modal visible={modalVisible} transparent={true} animationType="fade">
+        <View style={styles.modalOverlay}>
+          <View style={[styles.modalContent, { backgroundColor: colors.surface }]}>
+            <Text style={[styles.modalTitle, { color: colors.text }]}>Name this person</Text>
+            <TextInput
+              style={[styles.input, { color: colors.text, borderColor: colors.border }]}
+              placeholder="Name (required)"
+              placeholderTextColor={colors.text + '80'}
+              value={inputValue}
+              onChangeText={setInputValue}
+              autoFocus
+            />
+            <TextInput
+              style={[styles.input, { color: colors.text, borderColor: colors.border }]}
+              placeholder="Relation (e.g. father, friend, sister)"
+              placeholderTextColor={colors.text + '80'}
+              value={relationValue}
+              onChangeText={setRelationValue}
+            />
+            <TextInput
+              style={[styles.input, { color: colors.text, borderColor: colors.border }]}
+              placeholder="Age (optional)"
+              placeholderTextColor={colors.text + '80'}
+              value={ageValue}
+              onChangeText={setAgeValue}
+              keyboardType="numeric"
+            />
+            <TextInput
+              style={[styles.input, { color: colors.text, borderColor: colors.border }]}
+              placeholder="Location (optional)"
+              placeholderTextColor={colors.text + '80'}
+              value={locationValue}
+              onChangeText={setLocationValue}
+            />
+            <View style={styles.modalButtons}>
+              <Button title="Cancel" color={colors.text} onPress={() => setModalVisible(false)} />
+              <Button title="Confirm" color={colors.primary} onPress={handleConfirmName} />
+            </View>
+          </View>
+        </View>
+      </Modal>
     </ScrollView>
   );
 };
@@ -190,6 +269,12 @@ const styles = StyleSheet.create({
   title: {
     fontSize: 34,
     fontWeight: 'bold',
+  },
+  editButton: {
+    paddingHorizontal: 12,
+    paddingVertical: 6,
+    borderRadius: 16,
+    marginLeft: 'auto',
   },
   ownerBadge: {
     paddingHorizontal: 10,
@@ -250,6 +335,37 @@ const styles = StyleSheet.create({
     fontSize: 14,
     fontStyle: 'italic',
     marginTop: 8,
+  },
+  modalOverlay: {
+    flex: 1,
+    backgroundColor: 'rgba(0,0,0,0.5)',
+    justifyContent: 'center',
+    alignItems: 'center',
+  },
+  modalContent: {
+    width: 300,
+    padding: 20,
+    borderRadius: 12,
+    alignItems: 'center',
+  },
+  modalTitle: {
+    fontSize: 18,
+    fontWeight: 'bold',
+    marginBottom: 16,
+  },
+  input: {
+    width: '100%',
+    height: 44,
+    borderWidth: 1,
+    borderRadius: 8,
+    paddingHorizontal: 12,
+    marginTop: 16,
+    marginBottom: 20,
+  },
+  modalButtons: {
+    flexDirection: 'row',
+    justifyContent: 'space-between',
+    width: '100%',
   },
 });
 

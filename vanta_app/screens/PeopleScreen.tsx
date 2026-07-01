@@ -32,11 +32,6 @@ const FaceCell = ({
 }) => {
   const [crop, setCrop] = useState<FaceCrop | null>(null);
   const [imgSize, setImgSize] = useState<{ width: number; height: number } | null>(null);
-  const [modalVisible, setModalVisible] = useState(false);
-  const [inputValue, setInputValue] = useState('');
-  const [relationValue, setRelationValue] = useState('');
-  const [ageValue, setAgeValue] = useState('');
-  const [locationValue, setLocationValue] = useState('');
 
   useEffect(() => {
     let mounted = true;
@@ -76,41 +71,7 @@ const FaceCell = ({
   const navigation = useNavigation<any>();
 
   const handlePress = () => {
-    if (displayName === 'Unnamed') {
-      setInputValue('');
-      setRelationValue('');
-      setAgeValue('');
-      setLocationValue('');
-      setModalVisible(true);
-    } else {
-      navigation.navigate('EntityDetail', { entity });
-    }
-  };
-
-  const handleConfirm = async () => {
-    if (inputValue.trim() === '' || relationValue.trim() === '') return;
-    try {
-      const ageNum = ageValue.trim() !== '' ? parseInt(ageValue, 10) : 0;
-      const success = await VantaEngine.setEntityMetadata(
-        entity.entity_id,
-        inputValue.trim(),
-        relationValue.trim(),
-        isNaN(ageNum) ? 0 : ageNum,
-        locationValue.trim()
-      );
-      if (success) {
-        onNamed(entity.entity_id, inputValue.trim());
-        setModalVisible(false);
-      } else {
-        console.error('Failed to set entity metadata');
-      }
-    } catch (error) {
-      console.error('Error setting entity metadata', error);
-    }
-  };
-
-  const handleCancel = () => {
-    setModalVisible(false);
+    navigation.navigate('EntityDetail', { entity });
   };
 
   let imageContent;
@@ -152,54 +113,13 @@ const FaceCell = ({
           {displayName}
         </Text>
       </Pressable>
-      <Modal visible={modalVisible} transparent={true} animationType="fade">
-        <View style={styles.modalOverlay}>
-          <View style={[styles.modalContent, { backgroundColor: colors.surface }]}>
-            <Text style={[styles.modalTitle, { color: colors.text }]}>Name this person</Text>
-            {imageContent}
-            <TextInput
-              style={[styles.input, { color: colors.text, borderColor: colors.border }]}
-              placeholder="Name (required)"
-              placeholderTextColor={colors.text + '80'}
-              value={inputValue}
-              onChangeText={setInputValue}
-              autoFocus
-            />
-            <TextInput
-              style={[styles.input, { color: colors.text, borderColor: colors.border }]}
-              placeholder="Relation (e.g. father, friend, sister)"
-              placeholderTextColor={colors.text + '80'}
-              value={relationValue}
-              onChangeText={setRelationValue}
-            />
-            <TextInput
-              style={[styles.input, { color: colors.text, borderColor: colors.border }]}
-              placeholder="Age (optional)"
-              placeholderTextColor={colors.text + '80'}
-              value={ageValue}
-              onChangeText={setAgeValue}
-              keyboardType="numeric"
-            />
-            <TextInput
-              style={[styles.input, { color: colors.text, borderColor: colors.border }]}
-              placeholder="Location (optional)"
-              placeholderTextColor={colors.text + '80'}
-              value={locationValue}
-              onChangeText={setLocationValue}
-            />
-            <View style={styles.modalButtons}>
-              <Button title="Cancel" color={colors.text} onPress={handleCancel} />
-              <Button title="Confirm" color={colors.primary} onPress={handleConfirm} />
-            </View>
-          </View>
-        </View>
-      </Modal>
     </>
   );
 };
 
 export const PeopleScreen = () => {
   const { colors } = useTheme();
+  const navigation = useNavigation<any>();
   const [entities, setEntities] = useState<EntityMeta[]>([]);
   const [loading, setLoading] = useState(true);
 
@@ -219,6 +139,22 @@ export const PeopleScreen = () => {
     fetchEntities();
   }, []);
 
+  React.useEffect(() => {
+    const unsubscribe = navigation.addListener('focus', () => {
+      const fetchEntities = async () => {
+        try {
+          const jsonStr = await VantaEngine.getTopEntities();
+          const parsed = JSON.parse(jsonStr) as EntityMeta[];
+          setEntities(parsed);
+        } catch (error) {
+          console.error('Failed to load entities:', error);
+        }
+      };
+      fetchEntities();
+    });
+    return unsubscribe;
+  }, [navigation]);
+
   if (loading) {
     return (
       <View style={[styles.centerContainer, { backgroundColor: colors.background }]}>
@@ -227,14 +163,8 @@ export const PeopleScreen = () => {
     );
   }
 
-  const handleNameUpdate = (id: number, newName: string) => {
-    setEntities((prev) =>
-      prev.map((e) => (e.entity_id === id ? { ...e, display_name: newName } : e))
-    );
-  };
-
   const renderItem = ({ item }: { item: EntityMeta }) => {
-    return <FaceCell entity={item} colors={colors} onNamed={handleNameUpdate} />;
+    return <FaceCell entity={item} colors={colors} onNamed={() => {}} />;
   };
 
   return (

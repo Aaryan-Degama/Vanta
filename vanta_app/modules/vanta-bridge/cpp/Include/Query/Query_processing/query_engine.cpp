@@ -365,11 +365,27 @@ std::vector<search_result> search_images(
                     }
                     sqlite3_finalize(stmt);
                 }
-            } else {
-                // Multiple entities: INTERSECT in C++
+            } else if (resolved_entity_ids.size() == 2) {
+                // Exactly two entities: try to use the Knowledge Graph (entity_relation_files) for an optimized inner join
+                int64_t a = std::min(resolved_entity_ids[0], resolved_entity_ids[1]);
+                int64_t b = std::max(resolved_entity_ids[0], resolved_entity_ids[1]);
+                
+                sqlite3_stmt* stmt = nullptr;
+                const char* sql = "SELECT file_id FROM entity_relation_files WHERE entity_a = ? AND entity_b = ?";
+                if (sqlite3_prepare_v2(cand_db, sql, -1, &stmt, nullptr) == SQLITE_OK) {
+                    sqlite3_bind_int64(stmt, 1, a);
+                    sqlite3_bind_int64(stmt, 2, b);
+                    while (sqlite3_step(stmt) == SQLITE_ROW) {
+                        candidate_file_ids.push_back(sqlite3_column_int64(stmt, 0));
+                    }
+                    sqlite3_finalize(stmt);
+                }
+            }
+
+            if (candidate_file_ids.empty() && resolved_entity_ids.size() >= 2) {
+                // Multiple entities (>2) OR graph intersect was empty: INTERSECT in C++
                 // Load each entity's file_id set, keep only IDs present in ALL sets
                 std::vector<std::unordered_set<int64_t>> sets;
-
                 for (int64_t eid : resolved_entity_ids) {
                     std::unordered_set<int64_t> fids;
                     sqlite3_stmt* stmt = nullptr;
@@ -407,14 +423,8 @@ std::vector<search_result> search_images(
                         }
                     }
 
-                    // If intersect is empty, fall back to UNION
                     if (candidate_file_ids.empty()) {
-                        LOGI("Intersect empty, falling back to union of %zu entity sets", sets.size());
-                        std::unordered_set<int64_t> union_set;
-                        for (const auto& s : sets) {
-                            union_set.insert(s.begin(), s.end());
-                        }
-                        candidate_file_ids.assign(union_set.begin(), union_set.end());
+                        LOGI("Intersect empty. Returning 0 results instead of falling back to UNION.");
                     }
                 }
             }
@@ -424,6 +434,13 @@ std::vector<search_result> search_images(
 
         has_candidates = !candidate_file_ids.empty();
         LOGI("Candidate set: %zu file_ids", candidate_file_ids.size());
+
+        // If we resolved entities but found NO intersecting files, 
+        // we should return 0 results rather than falling back to global CLIP search.
+        if (!has_candidates && !resolved_entity_ids.empty()) {
+            LOGI("Resolved %zu entities, but intersection is empty. Returning 0 results.", resolved_entity_ids.size());
+            return results;
+        }
     }
 
     // Open DB for the final query stage
@@ -518,7 +535,21 @@ std::vector<search_result> search_images(
                         res.size_bytes = sqlite3_column_int64(file_stmt, 2);
                         res.mtime_unix = sqlite3_column_int64(file_stmt, 3);
 
-                        results.push_back(res);
+                        // Time-based Burst Shot Filter (NMS)
+                        // If this photo was taken within 30 seconds of an already accepted, higher-scoring photo, skip it to reduce noise.
+                        bool is_burst = false;
+                        if (res.mtime_unix > 0) {
+                            for (const auto& accepted : results) {
+                                if (accepted.mtime_unix > 0 && std::abs(accepted.mtime_unix - res.mtime_unix) < 30) {
+                                    is_burst = true;
+                                    break;
+                                }
+                            }
+                        }
+
+                        if (!is_burst) {
+                            results.push_back(res);
+                        }
                     }
                 }
                 sqlite3_finalize(file_stmt);
@@ -578,7 +609,20 @@ std::vector<search_result> search_images(
                         res.size_bytes = sqlite3_column_int64(file_stmt, 2);
                         res.mtime_unix = sqlite3_column_int64(file_stmt, 3);
 
-                        results.push_back(res);
+                        // Time-based Burst Shot Filter (NMS)
+                        bool is_burst = false;
+                        if (res.mtime_unix > 0) {
+                            for (const auto& accepted : results) {
+                                if (accepted.mtime_unix > 0 && std::abs(accepted.mtime_unix - res.mtime_unix) < 30) {
+                                    is_burst = true;
+                                    break;
+                                }
+                            }
+                        }
+
+                        if (!is_burst) {
+                            results.push_back(res);
+                        }
                     }
                 }
                 sqlite3_finalize(file_stmt);
