@@ -141,7 +141,7 @@ bool run_face_pipeline(sqlite3* db, const std::string& abs_path, int64_t file_id
     for (size_t i = 0; i < faces.size(); ++i) {
         std::string crop_path = "";
         try {
-            cv::Mat aligned = face_model.align_face(image, faces[i]);
+            cv::Mat aligned = face_model.align_face(image, faces[i], 320);
             if (!aligned.empty()) {
                 std::string target_path = VantaConfig::instance().crop_path(std::to_string(file_id) + "_" + std::to_string(i) + ".jpg");
                 if (cv::imwrite(target_path, aligned)) {

@@ -425,6 +425,25 @@ cv::Mat Face_embedding::align_face(const cv::Mat& image, const FaceResult& face)
     return aligned_face;
 }
 
+cv::Mat Face_embedding::align_face(const cv::Mat& image, const FaceResult& face, int output_size) {
+    // Scale the canonical 112-px landmarks to the requested output size
+    const float scale = static_cast<float>(output_size) / 112.0f;
+    float scaled_landmarks[5][2];
+    for (int i = 0; i < 5; ++i) {
+        scaled_landmarks[i][0] = kTargetLandmarks[i][0] * scale;
+        scaled_landmarks[i][1] = kTargetLandmarks[i][1] * scale;
+    }
+
+    cv::Mat src_pts(5, 2, CV_32FC1, (void*)face.keypoints.data());
+    cv::Mat dst_pts(5, 2, CV_32FC1, (void*)scaled_landmarks);
+
+    cv::Mat transformation_matrix = cv::estimateAffinePartial2D(src_pts, dst_pts);
+
+    cv::Mat aligned_face;
+    cv::warpAffine(image, aligned_face, transformation_matrix, cv::Size(output_size, output_size), cv::INTER_CUBIC);
+    return aligned_face;
+}
+
 std::vector<std::vector<float>> Face_embedding::get_embedding(const cv::Mat& image, const std::vector<FaceResult>& faces) {
     /*
     Extracts 512-dimensional embeddings for each detected face using the Buffalo_sc extractor model
