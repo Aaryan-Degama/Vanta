@@ -7,6 +7,7 @@ import android.app.Service
 import android.content.Intent
 import android.os.Build
 import android.os.IBinder
+import android.util.Log
 import androidx.core.app.NotificationCompat
 
 class IndexingService : Service() {
@@ -17,6 +18,7 @@ class IndexingService : Service() {
         const val ACTION_STOP = "ACTION_STOP"
     }
 
+    private external fun setModelsDirNative(modelsDir: String)
     private external fun generateEmbeddingsNative(dbPath: String): Boolean
 
     private var indexingThread: Thread? = null
@@ -49,6 +51,8 @@ class IndexingService : Service() {
                 indexingThread = Thread {
                     try {
                         extractAssetsIfNeeded(this)
+                        val modelsDir = VantaEngineConfig.getModelsDirectory(this)
+                        setModelsDirNative(modelsDir)
                         generateEmbeddingsNative(dbPath)
                     } catch (e: Exception) {
                         e.printStackTrace()
@@ -76,23 +80,34 @@ class IndexingService : Service() {
         return START_STICKY
     }
 
+    /**
+     * Copies bundled model assets from the APK to the app's files directory.
+     */
     private fun extractAssetsIfNeeded(context: android.content.Context) {
-        val modelsDir = java.io.File(context.filesDir, "VantaModels")
+        val modelsDir = java.io.File(VantaEngineConfig.getModelsDirectory(context))
         if (!modelsDir.exists()) modelsDir.mkdirs()
 
-        val filesToCopy = listOf("clip_image_fp16.onnx", "clip_text_fp16.onnx", "vocab.json", "merges.txt", "det_500m.onnx", "w600k_mbf.onnx")
+        val filesToCopy = listOf(
+            "clip_image_fp16.onnx",
+            "clip_text_fp16.onnx",
+            "vocab.json",
+            "merges.txt",
+            "det_500m.onnx",
+            "w600k_mbf.onnx"
+        )
+
         for (fileName in filesToCopy) {
             val file = java.io.File(modelsDir, fileName)
-            if (!file.exists()) {
-                try {
-                    context.assets.open("VantaModels/$fileName").use { input ->
-                        java.io.FileOutputStream(file).use { output ->
-                            input.copyTo(output)
-                        }
+            if (file.exists()) continue
+
+            try {
+                context.assets.open("VantaModels/$fileName").use { input ->
+                    java.io.FileOutputStream(file).use { output ->
+                        input.copyTo(output)
                     }
-                } catch (e: Exception) {
-                    e.printStackTrace()
                 }
+            } catch (e: Exception) {
+                Log.w("VantaEngine", "Failed to extract asset $fileName", e)
             }
         }
     }

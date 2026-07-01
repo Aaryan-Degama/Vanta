@@ -1,4 +1,5 @@
-import React, { createContext, useState, useEffect, useContext } from 'react';
+// React hooks and utilities.
+import React, { createContext, useState, useContext } from 'react';
 import { useColorScheme } from 'react-native';
 
 interface ThemeContextType {

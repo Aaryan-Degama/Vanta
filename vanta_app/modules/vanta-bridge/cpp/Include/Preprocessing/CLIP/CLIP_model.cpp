@@ -1,4 +1,5 @@
 #include "CLIP_model.hpp"
+#include "Config.hpp"
 #include <android/log.h>
 
 #define LOG_TAG "VantaEngine"
@@ -9,8 +10,12 @@ bool CLIP_session::load(){
         return true;
     }
 
-    std::string model_path = "/data/user/0/com.aaryan_ka.VantaApp/files/VantaModels/clip_image_fp16.onnx";
-    std::string text_model_path = "/data/user/0/com.aaryan_ka.VantaApp/files/VantaModels/clip_text_fp16.onnx";
+    // Resolve model paths from the runtime config instead of hard-coding the
+    // application package path. This keeps the engine working across build
+    // variants and if the bundle ID ever changes.
+    const VantaConfig& cfg = VantaConfig::instance();
+    std::string model_path = cfg.model_path("clip_image_fp16.onnx");
+    std::string text_model_path = cfg.model_path("clip_text_fp16.onnx");
 
     try{
         // :: To be removed ::

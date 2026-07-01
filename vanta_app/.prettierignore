@@ -1,0 +1,17 @@
+# Dependencies
+node_modules/
+
+# Build outputs
+android/
+ios/
+.expo/
+
+# Native module native code (not formatted by Prettier)
+modules/vanta-bridge/android/
+modules/vanta-bridge/cpp/
+
+# Lock files
+package-lock.json
+
+# Logs
+*.log

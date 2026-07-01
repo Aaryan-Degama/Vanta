@@ -1,6 +1,5 @@
 #include "query_engine.hpp"
 #include "CLIP_tokenizer.hpp"
-#include "IntentBuilder.hpp"
 #include <iostream>
 #include <android/log.h>
 #define SQLITE_CORE 1
@@ -52,13 +51,9 @@ std::vector<search_result> search_images(const std::string& db_path, const std::
     std::string corrected_query = get_corrected_query(raw_query);
     LOGI("search_images called: raw_query='%s' corrected_query='%s'", raw_query.c_str(), corrected_query.c_str());
 
-    // Apply Intent Builder
-    vanta::query::IntentBuilder intent_builder;
-    std::string intent_query = intent_builder.buildIntent(raw_query, corrected_query);
-    LOGI("IntentBuilder generated intent: '%s'", intent_query.c_str());
-    
-    // Fallback to corrected_query if intent_query is empty
-    std::string final_clip_query = intent_query.empty() ? corrected_query : intent_query;
+    // Intent parsing (e.g., NER/BERT) is planned for future work. For now we
+    // send the typo-corrected query directly to CLIP text encoding.
+    std::string final_clip_query = corrected_query;
     LOGI("Final query sent to CLIP: '%s'", final_clip_query.c_str());
 
     // Tokenize

@@ -19,13 +19,21 @@ bool Face_embedding::load() {
         - Prints status messages to stdout/stderr during loading
     */
 
+    // Resolve model paths from the runtime config before loading.
+    if (detector_path.empty()) {
+        detector_path = VantaConfig::instance().model_path("det_500m.onnx");
+    }
+    if (extractor_path.empty()) {
+        extractor_path = VantaConfig::instance().model_path("w600k_mbf.onnx");
+    }
+
     if (d_loaded) {
         std::cout << "Detector already loaded.\n";
     } else {
         try {
             // :: To be removed ::
             std::cout << "Loading Detector of Buffalo_sc Model ...\n";
-            
+
             detector_session = std::make_unique<Ort::Session>(shared_env, detector_path.c_str(), session_options_d);
             d_loaded = true;
         } catch (const std::exception& e) {

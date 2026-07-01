@@ -1,6 +1,24 @@
 {
+  // Extend Expo's base TypeScript configuration for React Native.
   "extends": "expo/tsconfig.base",
   "compilerOptions": {
-    "strict": true
-  }
+    // Enable strict type checking across the project.
+    "strict": true,
+    // Include Jest global types (describe, it, expect) in test files.
+    "types": ["jest"]
+  },
+  // Source files included in type checking. Test files are included so the
+  // Jest globals are resolved.
+  "include": [
+    "App.tsx",
+    "index.ts",
+    "ThemeContext.tsx",
+    "screens/**/*",
+    "modules/**/*",
+    "__tests__/**/*",
+    "__mocks__/**/*",
+    "*.config.js",
+    ".eslintrc.js"
+  ],
+  "exclude": ["node_modules", "android", "ios", ".expo"]
 }

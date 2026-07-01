@@ -1,21 +1,54 @@
 #include <jni.h>
 #include <string>
 #include <vector>
+#include <mutex>
+#include <atomic>
 #include <android/log.h>
+
+#include "Config.hpp"
+#include "json_utils.hpp"
 #include "DBoperations.hpp"
 #include "clip_db.hpp"
 #include "graph_db.hpp"
 #include "query_engine.hpp"
 #include "CLIP_model.hpp"
-#include <atomic>
 #include "CLIP_tokenizer.hpp"
 #include "face_DB.hpp"
+
 static CLIPTokenizer* g_tokenizer = nullptr;
 
+// Guards all global model/session state so indexing and search cannot race
+// while creating or loading sessions.
+static std::mutex g_session_mutex;
 
 #define LOG_TAG "VantaEngine"
 #define LOGI(...) __android_log_print(ANDROID_LOG_INFO, LOG_TAG, __VA_ARGS__)
 #define LOGE(...) __android_log_print(ANDROID_LOG_ERROR, LOG_TAG, __VA_ARGS__)
+
+extern "C" JNIEXPORT void JNICALL
+Java_expo_modules_vantaengine_VantaEngineModule_setModelsDirNative(
+    JNIEnv* env,
+    jobject /* this */,
+    jstring modelsDir) {
+
+    if (modelsDir == nullptr) return;
+
+    const char* models_dir_cstr = env->GetStringUTFChars(modelsDir, nullptr);
+    VantaConfig::instance().set_models_dir(std::string(models_dir_cstr));
+    env->ReleaseStringUTFChars(modelsDir, models_dir_cstr);
+
+    LOGI("Models directory set to: %s", VantaConfig::instance().models_dir().c_str());
+}
+
+extern "C" JNIEXPORT jboolean JNICALL
+Java_expo_modules_vantaengine_IndexingService_setModelsDirNative(
+    JNIEnv* env,
+    jobject /* this */,
+    jstring modelsDir) {
+
+    Java_expo_modules_vantaengine_VantaEngineModule_setModelsDirNative(env, nullptr, modelsDir);
+    return JNI_TRUE;
+}
 
 extern "C" JNIEXPORT jboolean JNICALL
 Java_expo_modules_vantaengine_VantaEngineModule_startStoring(
@@ -265,27 +298,31 @@ Java_expo_modules_vantaengine_VantaEngineModule_generateEmbeddingsNative(
         return JNI_FALSE;
     }
 
-    if (!g_clip_session) {
-        g_clip_session = new CLIP_session();
-    }
-    
-    g_index_status = "loading_models";
-    if (!g_clip_session->is_loaded()) {
-        if (!g_clip_session->load()) {
-            LOGE("Failed to load CLIP model");
-            sqlite3_close(db);
-            return JNI_FALSE;
-        }
-    }
+    {
+        std::lock_guard<std::mutex> lock(g_session_mutex);
 
-    if (!g_face_session) {
-        g_face_session = new Face_embedding();
-    }
-    if (!g_face_session->is_loaded()) {
-        if (!g_face_session->load()) {
-            LOGE("Failed to load Face model");
-            sqlite3_close(db);
-            return JNI_FALSE;
+        if (!g_clip_session) {
+            g_clip_session = new CLIP_session();
+        }
+
+        g_index_status = "loading_models";
+        if (!g_clip_session->is_loaded()) {
+            if (!g_clip_session->load()) {
+                LOGE("Failed to load CLIP model");
+                sqlite3_close(db);
+                return JNI_FALSE;
+            }
+        }
+
+        if (!g_face_session) {
+            g_face_session = new Face_embedding();
+        }
+        if (!g_face_session->is_loaded()) {
+            if (!g_face_session->load()) {
+                LOGE("Failed to load Face model");
+                sqlite3_close(db);
+                return JNI_FALSE;
+            }
         }
     }
 
@@ -354,14 +391,16 @@ extern "C" JNIEXPORT jstring JNICALL
 Java_expo_modules_vantaengine_VantaEngineModule_getIndexProgressNative(
     JNIEnv* env,
     jobject /* this */) {
-    
-    std::string current_file = g_current_processing_file;
-    std::string current_status = g_index_status;
-    std::string json = "{\"processed\": " + std::to_string(g_index_processed_count.load()) + 
-                       ", \"total\": " + std::to_string(g_index_total_count.load()) + 
-                       ", \"status\": \"" + current_status + "\"" +
-                       ", \"currentFile\": \"" + current_file + "\"}";
-                       
+
+    // Build a safe JSON object for the current indexing progress. Strings are
+    // escaped because currentFile may contain arbitrary file paths.
+    std::string json = "{" +
+        json_number_field("processed", g_index_processed_count.load()) + "," +
+        json_number_field("total", g_index_total_count.load()) + "," +
+        json_string_field("status", g_index_status) + "," +
+        json_string_field("currentFile", g_current_processing_file) +
+        "}";
+
     return env->NewStringUTF(json.c_str());
 }
 
@@ -399,27 +438,32 @@ Java_expo_modules_vantaengine_VantaEngineModule_searchImagesNative(
     std::string query(query_cstr);
     env->ReleaseStringUTFChars(queryStr, query_cstr);
 
-    if (!g_clip_session) {
-        g_clip_session = new CLIP_session();
-    }
-    
-    if (!g_clip_session->is_loaded()) {
-        LOGI("Loading CLIP model for search...");
-        if (!g_clip_session->load()) {
-            LOGE("Failed to load CLIP model for search");
-            return env->NewStringUTF("[]");
+    {
+        std::lock_guard<std::mutex> lock(g_session_mutex);
+
+        if (!g_clip_session) {
+            g_clip_session = new CLIP_session();
         }
-        LOGI("CLIP model loaded successfully for search.");
+
+        if (!g_clip_session->is_loaded()) {
+            LOGI("Loading CLIP model for search...");
+            if (!g_clip_session->load()) {
+                LOGE("Failed to load CLIP model for search");
+                return env->NewStringUTF("[]");
+            }
+            LOGI("CLIP model loaded successfully for search.");
+        }
+
+        if (!g_tokenizer) {
+            g_tokenizer = new CLIPTokenizer();
+        }
     }
 
-    if (!g_tokenizer) {
-        g_tokenizer = new CLIPTokenizer();
-    }
-    
     if (!g_tokenizer->is_loaded()) {
         LOGI("Loading CLIP tokenizer...");
-        std::string vocab_path = "/data/user/0/com.aaryan_ka.VantaApp/files/VantaModels/vocab.json";
-        std::string merges_path = "/data/user/0/com.aaryan_ka.VantaApp/files/VantaModels/merges.txt";
+        const VantaConfig& cfg = VantaConfig::instance();
+        std::string vocab_path = cfg.model_path("vocab.json");
+        std::string merges_path = cfg.model_path("merges.txt");
         if (!g_tokenizer->load(vocab_path, merges_path)) {
             LOGE("Failed to load CLIP Tokenizer");
             return env->NewStringUTF("[]");
@@ -431,23 +475,20 @@ Java_expo_modules_vantaengine_VantaEngineModule_searchImagesNative(
 
     LOGI("Building JSON response for %zu results", results.size());
 
+    // Build the JSON array using the safe helper so file paths and display
+    // names containing quotes or backslashes do not corrupt the response.
     std::string json = "[";
     for (size_t i = 0; i < results.size(); ++i) {
         const auto& r = results[i];
         if (i > 0) json += ",";
-        json += "{";
-        json += "\"file_id\":" + std::to_string(r.file_id) + ",";
-        
-        // Escape quotes and backslashes in strings just in case
-        std::string safe_path = r.abs_path;
-        std::string safe_name = r.display_name;
-        
-        json += "\"abs_path\":\"" + safe_path + "\",";
-        json += "\"display_name\":\"" + safe_name + "\",";
-        json += "\"size_bytes\":" + std::to_string(r.size_bytes) + ",";
-        json += "\"mtime_unix\":" + std::to_string(r.mtime_unix) + ",";
-        json += "\"distance\":" + std::to_string(r.distance);
-        json += "}";
+        json += "{" +
+            json_number_field("file_id", r.file_id) + "," +
+            json_string_field("abs_path", r.abs_path) + "," +
+            json_string_field("display_name", r.display_name) + "," +
+            json_number_field("size_bytes", r.size_bytes) + "," +
+            json_number_field("mtime_unix", r.mtime_unix) + "," +
+            json_number_field("distance", r.distance) +
+            "}";
     }
     json += "]";
 
@@ -479,29 +520,15 @@ Java_expo_modules_vantaengine_VantaEngineModule_getTopEntitiesNative(
 
     sqlite3_close(db);
 
-    auto escape_json = [](const std::string& s) -> std::string {
-        std::string out;
-        out.reserve(s.size());
-        for (char c : s) {
-            if (c == '"')       out += "\\\"";
-            else if (c == '\\') out += "\\\\";
-            else if (c == '\n') out += "\\n";
-            else if (c == '\r') out += "\\r";
-            else if (c == '\t') out += "\\t";
-            else out += c;
-        }
-        return out;
-    };
-
     std::string json = "[";
     for (size_t i = 0; i < entities.size(); ++i) {
         if (i > 0) json += ",";
-        json += "{";
-        json += "\"entity_id\":" + std::to_string(entities[i].entity_id) + ",";
-        json += "\"display_name\":\"" + escape_json(entities[i].display_name) + "\",";
-        json += "\"sample_count\":" + std::to_string(entities[i].sample_count) + ",";
-        json += "\"confidence\":" + std::to_string(entities[i].confidence);
-        json += "}";
+        json += "{" +
+            json_number_field("entity_id", entities[i].entity_id) + "," +
+            json_string_field("display_name", entities[i].display_name) + "," +
+            json_number_field("sample_count", entities[i].sample_count) + "," +
+            json_number_field("confidence", entities[i].confidence) +
+            "}";
     }
     json += "]";
 
@@ -536,28 +563,14 @@ Java_expo_modules_vantaengine_VantaEngineModule_getBestFaceCropNative(
         return env->NewStringUTF("{}");
     }
 
-    auto escape_json = [](const std::string& s) -> std::string {
-        std::string out;
-        out.reserve(s.size());
-        for (char c : s) {
-            if (c == '"')       out += "\\\"";
-            else if (c == '\\') out += "\\\\";
-            else if (c == '\n') out += "\\n";
-            else if (c == '\r') out += "\\r";
-            else if (c == '\t') out += "\\t";
-            else out += c;
-        }
-        return out;
-    };
-
-    std::string json = "{";
-    json += "\"file_id\":" + std::to_string(crop.file_id) + ",";
-    json += "\"abs_path\":\"" + escape_json(crop.abs_path) + "\",";
-    json += "\"bbox_x\":" + std::to_string(crop.bbox_x) + ",";
-    json += "\"bbox_y\":" + std::to_string(crop.bbox_y) + ",";
-    json += "\"bbox_w\":" + std::to_string(crop.bbox_w) + ",";
-    json += "\"bbox_h\":" + std::to_string(crop.bbox_h);
-    json += "}";
+    std::string json = "{" +
+        json_number_field("file_id", crop.file_id) + "," +
+        json_string_field("abs_path", crop.abs_path) + "," +
+        json_number_field("bbox_x", crop.bbox_x) + "," +
+        json_number_field("bbox_y", crop.bbox_y) + "," +
+        json_number_field("bbox_w", crop.bbox_w) + "," +
+        json_number_field("bbox_h", crop.bbox_h) +
+        "}";
 
     return env->NewStringUTF(json.c_str());
 }
@@ -618,28 +631,14 @@ Java_expo_modules_vantaengine_VantaEngineModule_getEntityNeighborsNative(
 
     sqlite3_close(db);
 
-    auto escape_json = [](const std::string& s) -> std::string {
-        std::string out;
-        out.reserve(s.size());
-        for (char c : s) {
-            if (c == '"')       out += "\\\"";
-            else if (c == '\\') out += "\\\\";
-            else if (c == '\n') out += "\\n";
-            else if (c == '\r') out += "\\r";
-            else if (c == '\t') out += "\\t";
-            else out += c;
-        }
-        return out;
-    };
-
     std::string json = "[";
     for (size_t i = 0; i < neighbors.size(); ++i) {
         if (i > 0) json += ",";
-        json += "{";
-        json += "\"neighbor_id\":" + std::to_string(neighbors[i].neighbor_id) + ",";
-        json += "\"display_name\":\"" + escape_json(neighbors[i].display_name) + "\",";
-        json += "\"co_occurrence_count\":" + std::to_string(neighbors[i].co_occurrence_count);
-        json += "}";
+        json += "{" +
+            json_number_field("neighbor_id", neighbors[i].neighbor_id) + "," +
+            json_string_field("display_name", neighbors[i].display_name) + "," +
+            json_number_field("co_occurrence_count", neighbors[i].co_occurrence_count) +
+            "}";
     }
     json += "]";
 
@@ -670,27 +669,13 @@ Java_expo_modules_vantaengine_VantaEngineModule_getEntityFilesNative(
 
     sqlite3_close(db);
 
-    auto escape_json = [](const std::string& s) -> std::string {
-        std::string out;
-        out.reserve(s.size());
-        for (char c : s) {
-            if (c == '"')       out += "\\\"";
-            else if (c == '\\') out += "\\\\";
-            else if (c == '\n') out += "\\n";
-            else if (c == '\r') out += "\\r";
-            else if (c == '\t') out += "\\t";
-            else out += c;
-        }
-        return out;
-    };
-
     std::string json = "[";
     for (size_t i = 0; i < files.size(); ++i) {
         if (i > 0) json += ",";
-        json += "{";
-        json += "\"file_id\":" + std::to_string(files[i].file_id) + ",";
-        json += "\"abs_path\":\"" + escape_json(files[i].abs_path) + "\"";
-        json += "}";
+        json += "{" +
+            json_number_field("file_id", files[i].file_id) + "," +
+            json_string_field("abs_path", files[i].abs_path) +
+            "}";
     }
     json += "]";
 
