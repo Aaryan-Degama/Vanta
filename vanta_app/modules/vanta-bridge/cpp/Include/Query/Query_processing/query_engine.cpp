@@ -1,5 +1,5 @@
 #include "query_engine.hpp"
-#include "Preprocessing/CLIP/CLIP_tokenizer.hpp"
+#include "CLIP_tokenizer.hpp"
 #include <iostream>
 #include <android/log.h>
 #define SQLITE_CORE 1
@@ -51,8 +51,13 @@ std::vector<search_result> search_images(const std::string& db_path, const std::
     std::string corrected_query = get_corrected_query(raw_query);
     LOGI("search_images called: raw_query='%s' corrected_query='%s'", raw_query.c_str(), corrected_query.c_str());
 
+    // Intent parsing (e.g., NER/BERT) is planned for future work. For now we
+    // send the typo-corrected query directly to CLIP text encoding.
+    std::string final_clip_query = corrected_query;
+    LOGI("Final query sent to CLIP: '%s'", final_clip_query.c_str());
+
     // Tokenize
-    std::vector<int64_t> tokens = tokenizer->encode(corrected_query);
+    std::vector<int64_t> tokens = tokenizer->encode(final_clip_query);
     LOGI("Tokenized query into %zu tokens.", tokens.size());
 
     LOGI("Generating text embedding for search query...");

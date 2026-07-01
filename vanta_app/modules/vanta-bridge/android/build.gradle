@@ -1,9 +1,11 @@
 plugins {
+  // Standard Android library plugin.
   id 'com.android.library'
+  // Expo module plugin that handles React Native/Expo integration.
   id 'expo-module-gradle-plugin'
 }
 
-// Keeping this matching the namespace you provided earlier
+// Maven coordinates for the native module.
 group = 'expo.modules.vantaengine'
 version = '0.1.0'
 
@@ -14,19 +16,22 @@ android {
     versionCode 1
     versionName "0.1.0"
 
+    // Vanta only targets arm64 devices because the bundled ONNX Runtime and
+    // OpenCV libraries are compiled for arm64-v8a.
     ndk {
       abiFilters 'arm64-v8a'
     }
 
-    // Tells Gradle how to compile the C++ code
+    // Tells Gradle how to compile the C++ code.
+    // C++20 is used so the engine and CMake agree on the language standard.
     externalNativeBuild {
       cmake {
-        cppFlags "-std=c++17"
+        cppFlags "-std=c++20"
       }
     }
   }
 
-  // Points Gradle exactly where to find your CMakeLists.txt
+  // Points Gradle to the CMake build script for the C++ engine.
   externalNativeBuild {
     cmake {
       path "../cpp/CMakeLists.txt"
@@ -34,6 +39,7 @@ android {
     }
   }
 
+  // Do not block the build on lint errors in generated/third-party code.
   lintOptions {
     abortOnError false
   }

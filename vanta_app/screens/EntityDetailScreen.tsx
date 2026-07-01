@@ -1,7 +1,19 @@
 import React, { useEffect, useState } from 'react';
-import { View, Text, FlatList, ActivityIndicator, Image, StyleSheet, ScrollView } from 'react-native';
+import {
+  View,
+  Text,
+  FlatList,
+  ActivityIndicator,
+  Image,
+  StyleSheet,
+  ScrollView,
+} from 'react-native';
 import VantaEngine from '../modules/vanta-bridge/src/VantaEngineModule';
-import { EntityMeta, EntityFile, NeighborResult } from '../modules/vanta-bridge/src/VantaEngine.types';
+import {
+  EntityMeta,
+  EntityFile,
+  NeighborResult,
+} from '../modules/vanta-bridge/src/VantaEngine.types';
 import { useTheme } from '../ThemeContext';
 
 interface RouteProps {
@@ -10,40 +22,57 @@ interface RouteProps {
   };
 }
 
-export const EntityDetailScreen = ({ route }: { route: RouteProps }) => {
-  const { entity } = route.params;
+/**
+ * Screen that shows all photos for a face entity and the people who often
+ * appear alongside them.
+ *
+ * The entity is normally passed via React Navigation route params. A fallback
+ * mock entity is provided so the screen can be rendered in isolation (e.g. in
+ * Jest smoke tests) without crashing.
+ */
+export const EntityDetailScreen = ({ route }: { route?: RouteProps }) => {
+  const { entity } = route?.params ?? {
+    entity: {
+      entity_id: -1,
+      display_name: 'Unknown',
+      sample_count: 0,
+      confidence: 0,
+    } as EntityMeta,
+  };
   const { colors } = useTheme();
-  
+
   const [files, setFiles] = useState<EntityFile[]>([]);
   const [neighbors, setNeighbors] = useState<NeighborResult[]>([]);
   const [loading, setLoading] = useState(true);
 
   useEffect(() => {
     let mounted = true;
-    
+
     const fetchDetails = async () => {
       try {
         const [filesJson, neighborsJson] = await Promise.all([
           VantaEngine.getEntityFiles(entity.entity_id),
-          VantaEngine.getEntityNeighbors(entity.entity_id)
+          VantaEngine.getEntityNeighbors(entity.entity_id),
         ]);
-        
+
         if (!mounted) return;
-        
+
         const parsedFiles = JSON.parse(filesJson) as EntityFile[];
         const parsedNeighbors = JSON.parse(neighborsJson) as NeighborResult[];
-        
+
         setFiles(parsedFiles);
         setNeighbors(parsedNeighbors);
       } catch (error) {
-        console.error("Failed to load entity details:", error);
+        console.error('Failed to load entity details:', error);
       } finally {
         if (mounted) setLoading(false);
       }
     };
 
     fetchDetails();
-    return () => { mounted = false; };
+    return () => {
+      mounted = false;
+    };
   }, [entity.entity_id]);
 
   if (loading) {
@@ -53,13 +82,14 @@ export const EntityDetailScreen = ({ route }: { route: RouteProps }) => {
       </View>
     );
   }
-  
-  const displayName = entity.display_name && entity.display_name.trim() !== '' ? entity.display_name : 'Unnamed';
+
+  const displayName =
+    entity.display_name && entity.display_name.trim() !== '' ? entity.display_name : 'Unnamed';
 
   const renderFileItem = ({ item }: { item: EntityFile }) => (
-    <Image 
-      source={{ uri: `file://${item.abs_path}` }} 
-      style={styles.photoItem} 
+    <Image
+      source={{ uri: `file://${item.abs_path}` }}
+      style={styles.photoItem}
       resizeMode="cover"
     />
   );
@@ -67,7 +97,7 @@ export const EntityDetailScreen = ({ route }: { route: RouteProps }) => {
   return (
     <ScrollView style={[styles.container, { backgroundColor: colors.background }]}>
       <Text style={[styles.title, { color: colors.text }]}>{displayName}</Text>
-      
+
       <Text style={[styles.sectionHeader, { color: colors.text }]}>Photos</Text>
       <FlatList
         horizontal
@@ -81,9 +111,15 @@ export const EntityDetailScreen = ({ route }: { route: RouteProps }) => {
       <Text style={[styles.sectionHeader, { color: colors.text }]}>People</Text>
       <View style={styles.neighborsContainer}>
         {neighbors.map((neighbor) => {
-          const neighborName = neighbor.display_name && neighbor.display_name.trim() !== '' ? neighbor.display_name : 'Unnamed';
+          const neighborName =
+            neighbor.display_name && neighbor.display_name.trim() !== ''
+              ? neighbor.display_name
+              : 'Unnamed';
           return (
-            <View key={neighbor.neighbor_id} style={[styles.neighborRow, { borderBottomColor: colors.border }]}>
+            <View
+              key={neighbor.neighbor_id}
+              style={[styles.neighborRow, { borderBottomColor: colors.border }]}
+            >
               <Text style={[styles.neighborName, { color: colors.text }]}>{neighborName}</Text>
               <Text style={[styles.neighborCount, { color: colors.text + '99' }]}>
                 {neighbor.co_occurrence_count} photos together
@@ -152,5 +188,5 @@ const styles = StyleSheet.create({
     fontSize: 14,
     fontStyle: 'italic',
     marginTop: 8,
-  }
+  },
 });

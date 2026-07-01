@@ -1,8 +1,17 @@
-// Package containing the Expo native module implementation.
-// Functions defined here can be called directly from React Native / Expo.
+/**
+ * Expo native module that bridges JavaScript to the Vanta C++ engine.
+ *
+ * This module exposes AsyncFunctions for scanning device media, generating
+ * embeddings, searching, and querying face clusters. It also initializes the
+ * C++ layer with the correct model directory at module creation time.
+ */
 package expo.modules.vantaengine
 
-// Android permission APIs used for permission checking logs.
+// Android Context and logging used throughout the module.
+import android.content.Context
+import android.util.Log
+
+// Permission APIs used for pre-scan logging.
 import android.Manifest
 import android.content.pm.PackageManager
 import androidx.core.content.ContextCompat
@@ -10,233 +19,212 @@ import androidx.core.content.ContextCompat
 // Expo Modules API base classes.
 import expo.modules.kotlin.modules.Module
 import expo.modules.kotlin.modules.ModuleDefinition
+import expo.modules.kotlin.Promise
 
 class VantaEngineModule : Module() {
 
     companion object {
         init {
             // Load the native C++ shared library (libvanta.so).
-            // This must be loaded before any JNI/native function is called.
+            // This must happen before any JNI function is invoked.
             System.loadLibrary("vanta")
         }
     }
 
-    // Native JNI function implemented in C++.
-    // Receives the database path and all scanned files,
-    // then stores them inside SQLite.
-    private external fun startStoring(
-        dbPath: String,
-        files: Array<FileMeta>
-    ): Boolean
+    //region JNI declarations
 
-    // Native JNI function implemented in C++.
-    // Reads stored file records from SQLite and returns them
-    // as an array of HashMaps.
-    private external fun getStoredFilesNative(
-        dbPath: String
-    ): Array<HashMap<String, Any>>
+    /**
+     * One-time initialization that tells the C++ engine where models live.
+     *
+     * Must be called before any function that loads ONNX models or tokenizers.
+     */
+    private external fun setModelsDirNative(modelsDir: String)
 
-    // Triggers CLIP embedding generation in C++
-    private external fun generateEmbeddingsNative(
-        dbPath: String
-    ): Boolean
+    /**
+     * Receives file metadata from the MediaStore scan and inserts it into SQLite.
+     */
+    private external fun startStoring(dbPath: String, files: Array<FileMeta>): Boolean
 
-    // Gets the current progress [processed, total]
+    /**
+     * Reads stored file records from SQLite and returns them as HashMaps.
+     */
+    private external fun getStoredFilesNative(dbPath: String): Array<HashMap<String, Any>>
+
+    /**
+     * Triggers CLIP + face embedding generation in C++.
+     */
+    private external fun generateEmbeddingsNative(dbPath: String): Boolean
+
+    /**
+     * Returns the current indexing progress as a JSON string.
+     */
     private external fun getIndexProgressNative(): String
 
-    // Pauses embedding generation
+    /**
+     * Signals the indexing loop to pause.
+     */
     private external fun pauseEmbeddingsNative()
 
-    private external fun getDatabaseStatsNative(
-        dbPath: String
-    ): String
+    /**
+     * Returns database statistics as a JSON string.
+     */
+    private external fun getDatabaseStatsNative(dbPath: String): String
 
-    private external fun searchImagesNative(
-        dbPath: String,
-        query: String
-    ): String
+    /**
+     * Searches indexed images using a natural-language query.
+     */
+    private external fun searchImagesNative(dbPath: String, query: String): String
 
+    /**
+     * Returns the top face entities as a JSON string.
+     */
     private external fun getTopEntitiesNative(dbPath: String): String
+
+    /**
+     * Returns the best thumbnail crop for a face entity as JSON.
+     */
     private external fun getBestFaceCropNative(dbPath: String, entityId: Long): String
+
+    /**
+     * Renames a face entity.
+     */
     private external fun setEntityNameNative(dbPath: String, entityId: Long, name: String): Boolean
+
+    /**
+     * Returns co-occurring people for a face entity as JSON.
+     */
     private external fun getEntityNeighborsNative(dbPath: String, entityId: Long): String
+
+    /**
+     * Returns files associated with a face entity as JSON.
+     */
     private external fun getEntityFilesNative(dbPath: String, entityId: Long): String
 
-    private fun extractAssetsIfNeeded(context: android.content.Context) {
-        val modelsDir = java.io.File(context.filesDir, "VantaModels")
+    //endregion
+
+    /**
+     * Copies bundled model assets from the APK to the app's files directory.
+     *
+     * ONNX Runtime needs the models to be regular files on disk, so we extract
+     * them once on first use.
+     */
+    private fun extractAssetsIfNeeded(context: Context) {
+        val modelsDir = java.io.File(VantaEngineConfig.getModelsDirectory(context))
         if (!modelsDir.exists()) modelsDir.mkdirs()
 
-        val filesToCopy = listOf("clip_image_fp16.onnx", "clip_text_fp16.onnx", "vocab.json", "merges.txt", "det_500m.onnx", "w600k_mbf.onnx")
+        val filesToCopy = listOf(
+            "clip_image_fp16.onnx",
+            "clip_text_fp16.onnx",
+            "vocab.json",
+            "merges.txt",
+            "det_500m.onnx",
+            "w600k_mbf.onnx"
+        )
+
         for (fileName in filesToCopy) {
             val file = java.io.File(modelsDir, fileName)
-            if (!file.exists()) {
-                try {
-                    context.assets.open("VantaModels/$fileName").use { input ->
-                        java.io.FileOutputStream(file).use { output ->
-                            input.copyTo(output)
-                        }
+            if (file.exists()) continue
+
+            try {
+                context.assets.open("VantaModels/$fileName").use { input ->
+                    java.io.FileOutputStream(file).use { output ->
+                        input.copyTo(output)
                     }
-                } catch (e: Exception) {
-                    e.printStackTrace()
                 }
+            } catch (e: Exception) {
+                // Asset may be missing in development; the C++ layer will log
+                // a clearer error when it tries to load the model.
+                Log.w("VantaEngine", "Failed to extract asset $fileName", e)
             }
         }
     }
 
     override fun definition() = ModuleDefinition {
-
-        // Name exposed to JavaScript.
-        // JS can access this module as "VantaEngine".
+        // Name exposed to JavaScript as `VantaEngine`.
         Name("VantaEngine")
 
-        // Main entry point for scanning and storing files.
-        AsyncFunction("startStoring") {
-
-            // Android context required for MediaStore access,
-            // database creation, permissions, etc.
+        /**
+         * Lifecycle hook called once when the module is created.
+         *
+         * We extract model assets and tell the C++ engine where they live so
+         * model loading never depends on a hard-coded package path.
+         */
+        OnCreate {
             val context = appContext.reactContext
                 ?: throw IllegalStateException("Android context unavailable")
 
-            // Log media permissions so we can quickly verify
-            // whether Android granted access before scanning.
+            extractAssetsIfNeeded(context)
+            setModelsDirNative(VantaEngineConfig.getModelsDirectory(context))
+        }
 
-            android.util.Log.d(
-                "VANTA_SCAN",
-                "READ_MEDIA_IMAGES = ${
-                    androidx.core.content.ContextCompat.checkSelfPermission(
-                        context,
-                        android.Manifest.permission.READ_MEDIA_IMAGES
-                    ) == android.content.pm.PackageManager.PERMISSION_GRANTED
-                }"
-            )
+        // Main entry point for scanning and storing files.
+        AsyncFunction("startStoring") {
+            val context = appContext.reactContext
+                ?: throw IllegalStateException("Android context unavailable")
 
-            android.util.Log.d(
-                "VANTA_SCAN",
-                "READ_MEDIA_VIDEO = ${
-                    androidx.core.content.ContextCompat.checkSelfPermission(
-                        context,
-                        android.Manifest.permission.READ_MEDIA_VIDEO
-                    ) == android.content.pm.PackageManager.PERMISSION_GRANTED
-                }"
-            )
+            logMediaPermissions(context)
 
-            android.util.Log.d(
-                "VANTA_SCAN",
-                "READ_MEDIA_AUDIO = ${
-                    androidx.core.content.ContextCompat.checkSelfPermission(
-                        context,
-                        android.Manifest.permission.READ_MEDIA_AUDIO
-                    ) == android.content.pm.PackageManager.PERMISSION_GRANTED
-                }"
-            )
-
-            // Stores every file discovered during the MediaStore scan.
+            // Collect every file discovered during the MediaStore scan.
             val allFiles = mutableListOf<FileMeta>()
-
-            // scanPhone() emits files in batches.
-            // We merge all batches into a single collection.
             scanPhone(context) { batch ->
                 allFiles.addAll(batch)
             }
 
-            // Calculate total size of all discovered files.
-            val totalBytes = allFiles.sumOf { it.sizeBytes }
+            logScanSummary(allFiles)
 
-            // Convert bytes into GB for easier reading.
-            val totalGB = totalBytes.toDouble() /
-                    (1024.0 * 1024.0 * 1024.0)
+            val dbPath = VantaEngineConfig.getDatabasePath(context)
+            java.io.File(dbPath).parentFile?.mkdirs()
 
-            android.util.Log.d(
-                "VANTA_SCAN",
-                "TOTAL SIZE = %.2f GB".format(totalGB)
-            )
+            // Hand collected metadata to the C++ engine.
+            val success = startStoring(dbPath, allFiles.toTypedArray())
 
-            // Total number of files found on the device.
-            android.util.Log.d(
-                "VANTA_SCAN",
-                "TOTAL FILES = ${allFiles.size}"
-            )
-
-            // Count files grouped by type.
-            // Example:
-            // {IMAGE=5000, VIDEO=200, AUDIO=50}
-            val stats = allFiles
-                .groupingBy { it.fileDtype }
-                .eachCount()
-
-            android.util.Log.d(
-                "VANTA_SCAN",
-                "BREAKDOWN = $stats"
-            )
-
-            // Android-managed location where the SQLite database
-            // will be stored.
-            val dbFile = context.getDatabasePath("vanta.db")
-
-            // Create database directory if it does not already exist.
-            dbFile.parentFile?.mkdirs()
-
-            // Hand all collected metadata to the native C++ layer.
-            // The native code is responsible for creating/opening
-            // SQLite and inserting rows.
-            val success = startStoring(
-                dbFile.absolutePath,
-                allFiles.toTypedArray()
-            )
-
-            // Return useful information back to JavaScript.
             mapOf(
                 "success" to success,
-                "databasePath" to dbFile.absolutePath,
-                "databaseExists" to dbFile.exists(),
-                "databaseSizeBytes" to if (dbFile.exists())
-                    dbFile.length()
+                "databasePath" to dbPath,
+                "databaseExists" to java.io.File(dbPath).exists(),
+                "databaseSizeBytes" to if (java.io.File(dbPath).exists())
+                    java.io.File(dbPath).length()
                 else
                     0L,
                 "scannedFileCount" to allFiles.size,
-                "stats" to stats.toString()
+                "stats" to allFiles.groupingBy { it.fileDtype }.eachCount().toString()
             )
         }
 
-        // Debug helper that reads records back from SQLite via C++.
-        // Useful for verifying that native insertion worked correctly.
+        // Debug helper that reads records back from SQLite.
         AsyncFunction("getStoredFiles") {
-
             val context = appContext.reactContext
                 ?: throw IllegalStateException("Android context unavailable")
 
-            val dbFile = context.getDatabasePath("vanta.db")
-
-            // No database means nothing has been indexed yet.
-            if (!dbFile.exists())
+            val dbPath = VantaEngineConfig.getDatabasePath(context)
+            if (!java.io.File(dbPath).exists()) {
                 return@AsyncFunction emptyList<Map<String, Any>>()
+            }
 
-            // Delegate entirely to native C++ for reading.
-            val nativeResults = getStoredFilesNative(dbFile.absolutePath)
-
-            // Convert Array<HashMap> to List<Map> for React Native.
+            val nativeResults = getStoredFilesNative(dbPath)
             nativeResults.toList()
         }
 
-        AsyncFunction("generateEmbeddings") { promise: expo.modules.kotlin.Promise ->
+        // Starts the foreground-service indexer.
+        AsyncFunction("generateEmbeddings") { promise: Promise ->
             val context = appContext.reactContext
             if (context == null) {
                 promise.reject("ERR", "Android context unavailable", null)
                 return@AsyncFunction
             }
 
-            val dbFile = context.getDatabasePath("vanta.db")
-
-            if (!dbFile.exists()) {
+            val dbPath = VantaEngineConfig.getDatabasePath(context)
+            if (!java.io.File(dbPath).exists()) {
                 promise.resolve(false)
                 return@AsyncFunction
             }
 
-            // Start Foreground Service to keep process alive and do the actual work
             val serviceIntent = android.content.Intent(context, IndexingService::class.java).apply {
                 action = IndexingService.ACTION_START
-                putExtra("dbPath", dbFile.absolutePath)
+                putExtra("dbPath", dbPath)
+                putExtra("modelsDir", VantaEngineConfig.getModelsDirectory(context))
             }
+
             if (android.os.Build.VERSION.SDK_INT >= android.os.Build.VERSION_CODES.O) {
                 context.startForegroundService(serviceIntent)
             } else {
@@ -258,34 +246,34 @@ class VantaEngineModule : Module() {
             val context = appContext.reactContext
                 ?: throw IllegalStateException("Android context unavailable")
 
-            val dbFile = context.getDatabasePath("vanta.db")
-
-            if (!dbFile.exists()) {
+            val dbPath = VantaEngineConfig.getDatabasePath(context)
+            if (!java.io.File(dbPath).exists()) {
                 return@AsyncFunction "{}"
             }
 
-            getDatabaseStatsNative(dbFile.absolutePath)
+            getDatabaseStatsNative(dbPath)
         }
 
-        AsyncFunction("searchImages") { query: String, promise: expo.modules.kotlin.Promise ->
+        AsyncFunction("searchImages") { query: String, promise: Promise ->
             val context = appContext.reactContext
             if (context == null) {
                 promise.reject("ERR", "Android context unavailable", null)
                 return@AsyncFunction
             }
 
-            val dbFile = context.getDatabasePath("vanta.db")
-
-            if (!dbFile.exists()) {
+            val dbPath = VantaEngineConfig.getDatabasePath(context)
+            if (!java.io.File(dbPath).exists()) {
                 promise.resolve("[]")
                 return@AsyncFunction
             }
 
             Thread {
                 try {
-                    // Ensure model files are extracted (in case search is called before indexing)
+                    // Ensure models are extracted in case search is called
+                    // before indexing has ever run.
                     extractAssetsIfNeeded(context)
-                    val result = searchImagesNative(dbFile.absolutePath, query)
+                    setModelsDirNative(VantaEngineConfig.getModelsDirectory(context))
+                    val result = searchImagesNative(dbPath, query)
                     promise.resolve(result)
                 } catch (e: Exception) {
                     promise.reject("ERR", e.message, e)
@@ -296,41 +284,83 @@ class VantaEngineModule : Module() {
         AsyncFunction("getTopEntities") {
             val context = appContext.reactContext
                 ?: throw IllegalStateException("Android context unavailable")
-            val dbFile = context.getDatabasePath("vanta.db")
-            if (!dbFile.exists()) return@AsyncFunction "[]"
-            getTopEntitiesNative(dbFile.absolutePath)
+
+            val dbPath = VantaEngineConfig.getDatabasePath(context)
+            if (!java.io.File(dbPath).exists()) return@AsyncFunction "[]"
+
+            getTopEntitiesNative(dbPath)
         }
 
         AsyncFunction("getBestFaceCrop") { entityId: Double ->
             val context = appContext.reactContext
                 ?: throw IllegalStateException("Android context unavailable")
-            val dbFile = context.getDatabasePath("vanta.db")
-            if (!dbFile.exists()) return@AsyncFunction "{}"
-            getBestFaceCropNative(dbFile.absolutePath, entityId.toLong())
+
+            val dbPath = VantaEngineConfig.getDatabasePath(context)
+            if (!java.io.File(dbPath).exists()) return@AsyncFunction "{}"
+
+            getBestFaceCropNative(dbPath, entityId.toLong())
         }
 
         AsyncFunction("setEntityName") { entityId: Double, name: String ->
             val context = appContext.reactContext
                 ?: throw IllegalStateException("Android context unavailable")
-            val dbFile = context.getDatabasePath("vanta.db")
-            if (!dbFile.exists()) return@AsyncFunction false
-            setEntityNameNative(dbFile.absolutePath, entityId.toLong(), name)
+
+            val dbPath = VantaEngineConfig.getDatabasePath(context)
+            if (!java.io.File(dbPath).exists()) return@AsyncFunction false
+
+            setEntityNameNative(dbPath, entityId.toLong(), name)
         }
 
         AsyncFunction("getEntityNeighbors") { entityId: Double ->
             val context = appContext.reactContext
                 ?: throw IllegalStateException("Android context unavailable")
-            val dbFile = context.getDatabasePath("vanta.db")
-            if (!dbFile.exists()) return@AsyncFunction "[]"
-            getEntityNeighborsNative(dbFile.absolutePath, entityId.toLong())
+
+            val dbPath = VantaEngineConfig.getDatabasePath(context)
+            if (!java.io.File(dbPath).exists()) return@AsyncFunction "[]"
+
+            getEntityNeighborsNative(dbPath, entityId.toLong())
         }
 
         AsyncFunction("getEntityFiles") { entityId: Double ->
             val context = appContext.reactContext
                 ?: throw IllegalStateException("Android context unavailable")
-            val dbFile = context.getDatabasePath("vanta.db")
-            if (!dbFile.exists()) return@AsyncFunction "[]"
-            getEntityFilesNative(dbFile.absolutePath, entityId.toLong())
+
+            val dbPath = VantaEngineConfig.getDatabasePath(context)
+            if (!java.io.File(dbPath).exists()) return@AsyncFunction "[]"
+
+            getEntityFilesNative(dbPath, entityId.toLong())
         }
+    }
+
+    /**
+     * Logs whether the media permissions required for scanning are granted.
+     */
+    private fun logMediaPermissions(context: Context) {
+        val permissions = listOf(
+            Manifest.permission.READ_MEDIA_IMAGES,
+            Manifest.permission.READ_MEDIA_VIDEO,
+            Manifest.permission.READ_MEDIA_AUDIO
+        )
+
+        for (permission in permissions) {
+            val granted = ContextCompat.checkSelfPermission(
+                context,
+                permission
+            ) == PackageManager.PERMISSION_GRANTED
+            Log.d("VANTA_SCAN", "$permission = $granted")
+        }
+    }
+
+    /**
+     * Logs a concise summary of the MediaStore scan.
+     */
+    private fun logScanSummary(files: List<FileMeta>) {
+        val totalBytes = files.sumOf { it.sizeBytes }
+        val totalGB = totalBytes.toDouble() / (1024.0 * 1024.0 * 1024.0)
+        val stats = files.groupingBy { it.fileDtype }.eachCount()
+
+        Log.d("VANTA_SCAN", "TOTAL SIZE = %.2f GB".format(totalGB))
+        Log.d("VANTA_SCAN", "TOTAL FILES = ${files.size}")
+        Log.d("VANTA_SCAN", "BREAKDOWN = $stats")
     }
 }

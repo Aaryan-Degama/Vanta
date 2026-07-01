@@ -10,11 +10,12 @@
 #include <stdexcept>
 #include <iostream>
 
-#include <onnxruntime_cxx_api.h>    
+#include <onnxruntime_cxx_api.h>
 #include <opencv2/core.hpp>
-#include <opencv2/imgproc.hpp>      
-#include <opencv2/imgcodecs.hpp>     
-#include <opencv2/calib3d.hpp>      
+#include <opencv2/imgproc.hpp>
+#include <opencv2/imgcodecs.hpp>
+#include <opencv2/calib3d.hpp>
+#include "Config.hpp"
 
 struct FaceResult {
     cv::Rect2f bbox; 
@@ -53,8 +54,11 @@ private:
     std::vector<FaceResult> nms(std::vector<FaceResult>& proposals, float iou_threshold);
 
 
-    const std::string detector_path  = "/data/user/0/com.aaryan_ka.VantaApp/files/VantaModels/det_500m.onnx"; 
-    const std::string extractor_path = "/data/user/0/com.aaryan_ka.VantaApp/files/VantaModels/w600k_mbf.onnx";
+    // Face model paths are resolved at load() time from VantaConfig so the
+    // engine does not depend on a hard-coded application package path.
+    std::string detector_path;
+    std::string extractor_path;
+
 public:
     bool load();
     bool unload();

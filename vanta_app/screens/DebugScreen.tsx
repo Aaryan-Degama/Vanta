@@ -8,7 +8,7 @@ import {
   ActivityIndicator,
   Alert,
   PermissionsAndroid,
-  Platform
+  Platform,
 } from 'react-native';
 import * as VantaEngine from '../modules/vanta-bridge';
 import { useTheme } from '../ThemeContext';
@@ -20,11 +20,19 @@ interface FileEntry {
   size: number;
 }
 
+// Shape of the object returned by startStoring() in the native layer.
+interface ScanResult {
+  databasePath: string;
+  scannedFileCount: number;
+  success: boolean;
+}
+
 export default function DebugScreen() {
   const { colors } = useTheme();
   const [files, setFiles] = useState<FileEntry[]>([]);
   const [loading, setLoading] = useState(false);
-  const [stats, setStats] = useState<any>(null);
+  // Result object returned by the native scan function; null before the first scan.
+  const [stats, setStats] = useState<ScanResult | null>(null);
 
   const requestMediaPermissions = async () => {
     if (Platform.OS !== 'android') {
@@ -38,18 +46,21 @@ export default function DebugScreen() {
     ]);
 
     return (
-      permissions[PermissionsAndroid.PERMISSIONS.READ_MEDIA_IMAGES] === PermissionsAndroid.RESULTS.GRANTED &&
-      permissions[PermissionsAndroid.PERMISSIONS.READ_MEDIA_VIDEO] === PermissionsAndroid.RESULTS.GRANTED &&
-      permissions[PermissionsAndroid.PERMISSIONS.READ_MEDIA_AUDIO] === PermissionsAndroid.RESULTS.GRANTED
+      permissions[PermissionsAndroid.PERMISSIONS.READ_MEDIA_IMAGES] ===
+        PermissionsAndroid.RESULTS.GRANTED &&
+      permissions[PermissionsAndroid.PERMISSIONS.READ_MEDIA_VIDEO] ===
+        PermissionsAndroid.RESULTS.GRANTED &&
+      permissions[PermissionsAndroid.PERMISSIONS.READ_MEDIA_AUDIO] ===
+        PermissionsAndroid.RESULTS.GRANTED
     );
   };
 
   const refreshFiles = async () => {
     try {
       const data = await VantaEngine.getStoredFiles();
-      setFiles(data);
-    } catch (e) {
-      console.error(e);
+      setFiles(data as FileEntry[]);
+    } catch (_err) {
+      // Ignore refresh errors; the user can retry by pressing Scan again.
     }
   };
 
@@ -61,22 +72,20 @@ export default function DebugScreen() {
     const granted = await requestMediaPermissions();
 
     if (!granted) {
-      Alert.alert(
-        "Permission Required",
-        "Please grant Photos, Videos and Audio permissions."
-      );
+      Alert.alert('Permission Required', 'Please grant Photos, Videos and Audio permissions.');
       return;
     }
 
     setLoading(true);
 
     try {
-      const result = await VantaEngine.startStoring();
+      const result = (await VantaEngine.startStoring()) as ScanResult;
       setStats(result);
-      Alert.alert("Scan Complete", `Stored ${result.scannedFileCount} files.`);
+      Alert.alert('Scan Complete', `Stored ${result.scannedFileCount} files.`);
       await refreshFiles();
-    } catch (e: any) {
-      Alert.alert("Error", e.message);
+    } catch (err: unknown) {
+      const message = err instanceof Error ? err.message : String(err);
+      Alert.alert('Error', message);
     } finally {
       setLoading(false);
     }
@@ -88,7 +97,7 @@ export default function DebugScreen() {
 
       <View style={styles.buttonContainer}>
         <Button
-          title={loading ? "Scanning..." : "Start Media Scan & Store"}
+          title={loading ? 'Scanning...' : 'Start Media Scan & Store'}
           onPress={handleStartScan}
           disabled={loading}
           color="#0066cc"
@@ -97,9 +106,11 @@ export default function DebugScreen() {
 
       {stats && (
         <View style={[styles.statsBox, { backgroundColor: colors.surface }]}>
-          <Text style={{ color: colors.text }}>Database Path: {stats.databasePath.split('/').pop()}</Text>
+          <Text style={{ color: colors.text }}>
+            Database Path: {stats.databasePath.split('/').pop()}
+          </Text>
           <Text style={{ color: colors.text }}>Files Scanned: {stats.scannedFileCount}</Text>
-          <Text style={{ color: colors.text }}>Success: {stats.success ? "Yes" : "No"}</Text>
+          <Text style={{ color: colors.text }}>Success: {stats.success ? 'Yes' : 'No'}</Text>
         </View>
       )}
 
@@ -112,9 +123,18 @@ export default function DebugScreen() {
           data={files}
           keyExtractor={(item) => item.uri}
           renderItem={({ item }) => (
-            <View style={[styles.fileItem, { backgroundColor: colors.surface, borderColor: colors.border }]}>
-              <Text style={[styles.uriText, { color: colors.text }]} numberOfLines={2}>{item.uri}</Text>
-              <Text style={styles.detailsText}>{item.type} | {item.mime} | {(item.size / 1024).toFixed(1)} KB</Text>
+            <View
+              style={[
+                styles.fileItem,
+                { backgroundColor: colors.surface, borderColor: colors.border },
+              ]}
+            >
+              <Text style={[styles.uriText, { color: colors.text }]} numberOfLines={2}>
+                {item.uri}
+              </Text>
+              <Text style={styles.detailsText}>
+                {item.type} | {item.mime} | {(item.size / 1024).toFixed(1)} KB
+              </Text>
             </View>
           )}
           ListEmptyComponent={<Text style={styles.emptyText}>No files stored in DB yet.</Text>}
@@ -173,5 +193,5 @@ const styles = StyleSheet.create({
     textAlign: 'center',
     marginTop: 40,
     color: '#999',
-  }
+  },
 });

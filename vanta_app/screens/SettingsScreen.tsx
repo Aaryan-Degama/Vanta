@@ -1,9 +1,60 @@
 import React, { useState } from 'react';
-import { View, Text, StyleSheet, Switch, TouchableOpacity, ActivityIndicator, PermissionsAndroid, Platform, Animated } from 'react-native';
+import {
+  View,
+  Text,
+  StyleSheet,
+  Switch,
+  TouchableOpacity,
+  ActivityIndicator,
+  PermissionsAndroid,
+  Platform,
+  Animated,
+} from 'react-native';
 import { useTheme } from '../ThemeContext';
 import { useNavigation } from '@react-navigation/native';
 import { Ionicons } from '@expo/vector-icons';
-import { startStoring, generateEmbeddings, getIndexProgress, getDatabaseStats, pauseEmbeddings } from '../modules/vanta-bridge';
+import {
+  startStoring,
+  generateEmbeddings,
+  getIndexProgress,
+  getDatabaseStats,
+  pauseEmbeddings,
+} from '../modules/vanta-bridge';
+import { formatBytes } from '../utils/formatting';
+
+/**
+ * Single row in the storage-usage legend.
+ *
+ * Declared outside the screen component so it is not recreated on every render.
+ * The label/value/text colors depend on the current theme, which is passed in
+ * as a prop.
+ */
+function LegendItem({
+  color,
+  label,
+  value,
+  textColor,
+  chevronColor,
+}: {
+  color: string;
+  label: string;
+  value: string;
+  textColor: string;
+  chevronColor: string;
+}) {
+  return (
+    <View style={styles.legendRow}>
+      <View style={styles.legendLeft}>
+        <View style={[styles.dot, { backgroundColor: color }]} />
+        <Text style={[styles.legendLabel, { color: textColor }]}>{label}</Text>
+      </View>
+      <View style={styles.legendRight}>
+        <Text style={[styles.legendValue, { color: textColor }]}>{value}</Text>
+        <Ionicons name="chevron-forward" size={16} color={chevronColor} />
+      </View>
+    </View>
+  );
+}
 
 export default function SettingsScreen() {
   const { isDarkMode, toggleDarkMode, colors } = useTheme();
@@ -46,72 +97,53 @@ export default function SettingsScreen() {
           toValue: 0,
           duration: 300,
           useNativeDriver: true,
-        })
+        }),
       ]).start();
     }
   }, [currentFile]);
 
-  const pollIntervalRef = React.useRef<NodeJS.Timeout | null>(null);
+  // Holds the interval ID for the index-progress polling loop.
+  const pollIntervalRef = React.useRef<ReturnType<typeof setInterval> | null>(null);
 
-  React.useEffect(() => {
-    fetchStats();
-    
-    const checkStatus = async () => {
-      try {
-        const progressString = await getIndexProgress();
-        if (progressString) {
-          const data = JSON.parse(progressString);
-          if (data.status === 'processing' || data.status === 'loading_models') {
-            setIsIndexing(true);
-            setIsPaused(false);
-            if (data.currentFile) {
-              setCurrentFile(prev => {
-                if (prev !== data.currentFile) {
-                  setPrevFile(prev);
-                  return data.currentFile;
-                }
-                return prev;
-              });
-            }
-            startPolling();
-          } else if (data.status === 'paused') {
-            setIsPaused(true);
-          }
-        }
-      } catch (e) {}
-    };
-    checkStatus();
-
-    return () => {
-      if (pollIntervalRef.current) clearInterval(pollIntervalRef.current);
-    };
-  }, []);
-
-  const fetchStats = async () => {
+  /**
+   * Fetches database statistics from the native engine and updates the UI.
+   *
+   * Declared as a function (not a const) so it is hoisted and can be called
+   * from the initial useEffect below without triggering the immutability lint
+   * rule.
+   */
+  async function fetchStats() {
     try {
       const statsJson = await getDatabaseStats();
-      console.log("RAW DB STATS FROM C++:", statsJson);
+      console.log('RAW DB STATS FROM C++:', statsJson);
       const parsed = JSON.parse(statsJson);
       setDbStats(parsed);
-      
+
       if (parsed.target_files_count && parsed.target_files_count > 0) {
-        let percent = Math.ceil((parsed.clip_vec_count || 0) / parsed.target_files_count * 100);
+        let percent = Math.ceil(((parsed.clip_vec_count || 0) / parsed.target_files_count) * 100);
         if (percent > 100) percent = 100;
         setIndexProgress(percent);
       }
     } catch (e) {
       console.error(e);
     }
-  };
+  }
 
-  const startPolling = () => {
+  /**
+   * Starts a 1-second polling loop that reads native indexing progress.
+   *
+   * Like fetchStats, this is a function declaration so it can be referenced
+   * from the status-check effect before its textual definition.
+   */
+  function startPolling() {
+    // Clear any existing interval before starting a new one.
     if (pollIntervalRef.current) clearInterval(pollIntervalRef.current);
     pollIntervalRef.current = setInterval(async () => {
       try {
         const progressString = await getIndexProgress();
         if (progressString) {
           const data = JSON.parse(progressString);
-          
+
           if (data.total && data.total > 0 && data.status === 'processing') {
             let percent = Math.ceil((data.processed / data.total) * 100);
             if (percent > 100) percent = 100;
@@ -128,7 +160,7 @@ export default function SettingsScreen() {
             setIsIndexing(true);
             setIsPaused(false);
             if (data.currentFile) {
-              setCurrentFile(prev => {
+              setCurrentFile((prev) => {
                 if (prev !== data.currentFile) {
                   setPrevFile(prev);
                   return data.currentFile;
@@ -142,7 +174,44 @@ export default function SettingsScreen() {
         // Ignore
       }
     }, 1000);
-  };
+  }
+
+  // On mount: load stats once and check whether indexing is already running.
+  React.useEffect(() => {
+    fetchStats();
+
+    const checkStatus = async () => {
+      try {
+        const progressString = await getIndexProgress();
+        if (progressString) {
+          const data = JSON.parse(progressString);
+          if (data.status === 'processing' || data.status === 'loading_models') {
+            setIsIndexing(true);
+            setIsPaused(false);
+            if (data.currentFile) {
+              setCurrentFile((prev) => {
+                if (prev !== data.currentFile) {
+                  setPrevFile(prev);
+                  return data.currentFile;
+                }
+                return prev;
+              });
+            }
+            startPolling();
+          } else if (data.status === 'paused') {
+            setIsPaused(true);
+          }
+        }
+      } catch (e) {
+        // Index progress may be unavailable before the first scan; ignore.
+      }
+    };
+    checkStatus();
+
+    return () => {
+      if (pollIntervalRef.current) clearInterval(pollIntervalRef.current);
+    };
+  }, []);
 
   const handleStartIndexing = async () => {
     if (isIndexing) return;
@@ -158,11 +227,14 @@ export default function SettingsScreen() {
           PermissionsAndroid.PERMISSIONS.READ_MEDIA_AUDIO,
         ]);
         if (
-          permissions[PermissionsAndroid.PERMISSIONS.READ_MEDIA_IMAGES] !== PermissionsAndroid.RESULTS.GRANTED &&
-          permissions[PermissionsAndroid.PERMISSIONS.READ_MEDIA_VIDEO] !== PermissionsAndroid.RESULTS.GRANTED &&
-          permissions[PermissionsAndroid.PERMISSIONS.READ_MEDIA_AUDIO] !== PermissionsAndroid.RESULTS.GRANTED
+          permissions[PermissionsAndroid.PERMISSIONS.READ_MEDIA_IMAGES] !==
+            PermissionsAndroid.RESULTS.GRANTED &&
+          permissions[PermissionsAndroid.PERMISSIONS.READ_MEDIA_VIDEO] !==
+            PermissionsAndroid.RESULTS.GRANTED &&
+          permissions[PermissionsAndroid.PERMISSIONS.READ_MEDIA_AUDIO] !==
+            PermissionsAndroid.RESULTS.GRANTED
         ) {
-          console.warn("Permissions not granted");
+          console.warn('Permissions not granted');
         }
       } catch (err) {
         console.warn(err);
@@ -172,13 +244,13 @@ export default function SettingsScreen() {
     try {
       console.log('Starting scan...');
       await startStoring();
-      
+
       startPolling();
 
       console.log('Generating embeddings...');
       const success = await generateEmbeddings();
       if (!success) {
-        alert("Failed to load AI Models! Did you adb push them?");
+        alert('Failed to load AI Models! Did you adb push them?');
         setIsIndexing(false);
         if (pollIntervalRef.current) clearInterval(pollIntervalRef.current);
       }
@@ -196,29 +268,8 @@ export default function SettingsScreen() {
       setIsIndexing(false);
       if (pollIntervalRef.current) clearInterval(pollIntervalRef.current);
     } catch (e) {
-      console.error("Failed to pause", e);
+      console.error('Failed to pause', e);
     }
-  };
-
-  const LegendItem = ({ color, label, value }: { color: string, label: string, value: string }) => (
-    <View style={styles.legendRow}>
-      <View style={styles.legendLeft}>
-        <View style={[styles.dot, { backgroundColor: color }]} />
-        <Text style={[styles.legendLabel, { color: isDarkMode ? '#e5e5ea' : '#3a3a3c' }]}>{label}</Text>
-      </View>
-      <View style={styles.legendRight}>
-        <Text style={[styles.legendValue, { color: isDarkMode ? '#e5e5ea' : '#3a3a3c' }]}>{value}</Text>
-        <Ionicons name="chevron-forward" size={16} color={isDarkMode ? '#8e8e93' : '#c7c7cc'} />
-      </View>
-    </View>
-  );
-
-  const formatBytes = (bytes: number) => {
-    if (!bytes || bytes === 0) return '0 B';
-    const k = 1024;
-    const sizes = ['B', 'KB', 'MB', 'GB', 'TB'];
-    const i = Math.floor(Math.log(bytes) / Math.log(k));
-    return parseFloat((bytes / Math.pow(k, i)).toFixed(2)) + ' ' + sizes[i];
   };
 
   const imagesData = dbStats['image'] || dbStats['picture'] || { count: 0, size: 0 };
@@ -227,18 +278,24 @@ export default function SettingsScreen() {
   const docsData = dbStats['document'] || { count: 0, size: 0 };
 
   const totalSize = imagesData.size + videosData.size + audioData.size + docsData.size;
-  const getFlex = (size: number) => totalSize > 0 ? (size / totalSize) * 100 : 0;
+  const getFlex = (size: number) => (totalSize > 0 ? (size / totalSize) * 100 : 0);
 
   return (
     <View style={[styles.container, { backgroundColor: colors.background }]}>
-      <TouchableOpacity onPress={() => navigation.goBack()} style={[styles.iconButton, { backgroundColor: colors.iconBackground }]}>
+      <TouchableOpacity
+        onPress={() => navigation.goBack()}
+        style={[styles.iconButton, { backgroundColor: colors.iconBackground }]}
+      >
         <Ionicons name="chevron-back" size={24} color={colors.iconColor} />
       </TouchableOpacity>
       <Text style={[styles.title, { color: colors.text }]}>Settings</Text>
 
       <View style={styles.indexStatusRow}>
         <View style={{ flex: 1, paddingRight: 10 }}>
-          <Text style={[styles.percentageText, { color: colors.text }]}>{indexProgress}% <Text style={[styles.indexedLabel, { color: colors.text }]}>indexed</Text></Text>
+          <Text style={[styles.percentageText, { color: colors.text }]}>
+            {indexProgress}%{' '}
+            <Text style={[styles.indexedLabel, { color: colors.text }]}>indexed</Text>
+          </Text>
           {isIndexing && (
             <View style={{ flexDirection: 'row', alignItems: 'center', marginTop: 4 }}>
               <Text style={{ color: colors.text, opacity: 0.6, fontSize: 13 }}>
@@ -246,16 +303,19 @@ export default function SettingsScreen() {
               </Text>
               <View style={{ flex: 1, height: 18, overflow: 'hidden', justifyContent: 'center' }}>
                 {prevFile ? (
-                  <Animated.Text 
-                    style={{ 
+                  <Animated.Text
+                    style={{
                       position: 'absolute',
-                      color: colors.text, 
-                      opacity: fadeOutAnim.interpolate({ inputRange: [0, 1], outputRange: [0, 0.6] }), 
+                      color: colors.text,
+                      opacity: fadeOutAnim.interpolate({
+                        inputRange: [0, 1],
+                        outputRange: [0, 0.6],
+                      }),
                       transform: [{ translateY: translateOutYAnim }],
-                      fontSize: 13, 
-                      width: '100%'
-                    }} 
-                    numberOfLines={1} 
+                      fontSize: 13,
+                      width: '100%',
+                    }}
+                    numberOfLines={1}
                     ellipsizeMode="middle"
                   >
                     {prevFile.split('/').pop()}
@@ -263,16 +323,19 @@ export default function SettingsScreen() {
                 ) : null}
 
                 {currentFile ? (
-                  <Animated.Text 
-                    style={{ 
+                  <Animated.Text
+                    style={{
                       position: 'absolute',
-                      color: colors.text, 
-                      opacity: fadeInAnim.interpolate({ inputRange: [0, 1], outputRange: [0, 0.6] }), 
+                      color: colors.text,
+                      opacity: fadeInAnim.interpolate({
+                        inputRange: [0, 1],
+                        outputRange: [0, 0.6],
+                      }),
                       transform: [{ translateY: translateInYAnim }],
-                      fontSize: 13, 
-                      width: '100%'
-                    }} 
-                    numberOfLines={1} 
+                      fontSize: 13,
+                      width: '100%',
+                    }}
+                    numberOfLines={1}
                     ellipsizeMode="middle"
                   >
                     {currentFile.split('/').pop()}
@@ -282,11 +345,13 @@ export default function SettingsScreen() {
             </View>
           )}
         </View>
-        <TouchableOpacity 
+        <TouchableOpacity
           style={[
-            styles.startButton, 
-            isIndexing ? { backgroundColor: '#34c759', borderRadius: 30 } : { backgroundColor: '#ffffff', borderRadius: 30 }
-          ]} 
+            styles.startButton,
+            isIndexing
+              ? { backgroundColor: '#34c759', borderRadius: 30 }
+              : { backgroundColor: '#ffffff', borderRadius: 30 },
+          ]}
           onPress={isIndexing ? handlePauseIndexing : handleStartIndexing}
         >
           {isIndexing ? (
@@ -296,7 +361,7 @@ export default function SettingsScreen() {
             </View>
           ) : (
             <Text style={[styles.startButtonText, { color: '#000000', fontWeight: 'bold' }]}>
-              {indexProgress > 0 && indexProgress < 100 || isPaused ? "Resume" : "Start Indexing"}
+              {(indexProgress > 0 && indexProgress < 100) || isPaused ? 'Resume' : 'Start Indexing'}
             </Text>
           )}
         </TouchableOpacity>
@@ -304,17 +369,69 @@ export default function SettingsScreen() {
 
       <View style={[styles.card, { backgroundColor: isDarkMode ? '#3a3a3c' : '#f2f2f7' }]}>
         <View style={styles.stackedBarContainer}>
-          <View style={[styles.barSegment, { flex: getFlex(imagesData.size) || 1, backgroundColor: '#ff4d6d' }]} />
-          <View style={[styles.barSegment, { flex: getFlex(videosData.size), backgroundColor: '#7b2cbf' }]} />
-          <View style={[styles.barSegment, { flex: getFlex(audioData.size), backgroundColor: '#00b4d8' }]} />
-          <View style={[styles.barSegment, { flex: getFlex(docsData.size), backgroundColor: '#fca311' }]} />
-          <View style={[styles.barSegment, { flex: totalSize === 0 ? 100 : 0, backgroundColor: isDarkMode ? '#48484a' : '#d1d1d6' }]} />
+          <View
+            style={[
+              styles.barSegment,
+              { flex: getFlex(imagesData.size) || 1, backgroundColor: '#ff4d6d' },
+            ]}
+          />
+          <View
+            style={[
+              styles.barSegment,
+              { flex: getFlex(videosData.size), backgroundColor: '#7b2cbf' },
+            ]}
+          />
+          <View
+            style={[
+              styles.barSegment,
+              { flex: getFlex(audioData.size), backgroundColor: '#00b4d8' },
+            ]}
+          />
+          <View
+            style={[
+              styles.barSegment,
+              { flex: getFlex(docsData.size), backgroundColor: '#fca311' },
+            ]}
+          />
+          <View
+            style={[
+              styles.barSegment,
+              {
+                flex: totalSize === 0 ? 100 : 0,
+                backgroundColor: isDarkMode ? '#48484a' : '#d1d1d6',
+              },
+            ]}
+          />
         </View>
 
-        <LegendItem color="#ff4d6d" label={`Images (${imagesData.count})`} value={formatBytes(imagesData.size)} />
-        <LegendItem color="#7b2cbf" label={`Videos (${videosData.count})`} value={formatBytes(videosData.size)} />
-        <LegendItem color="#00b4d8" label={`Audio files (${audioData.count})`} value={formatBytes(audioData.size)} />
-        <LegendItem color="#fca311" label={`Documents (${docsData.count})`} value={formatBytes(docsData.size)} />
+        <LegendItem
+          color="#ff4d6d"
+          label={`Images (${imagesData.count})`}
+          value={formatBytes(imagesData.size)}
+          textColor={isDarkMode ? '#e5e5ea' : '#3a3a3c'}
+          chevronColor={isDarkMode ? '#8e8e93' : '#c7c7cc'}
+        />
+        <LegendItem
+          color="#7b2cbf"
+          label={`Videos (${videosData.count})`}
+          value={formatBytes(videosData.size)}
+          textColor={isDarkMode ? '#e5e5ea' : '#3a3a3c'}
+          chevronColor={isDarkMode ? '#8e8e93' : '#c7c7cc'}
+        />
+        <LegendItem
+          color="#00b4d8"
+          label={`Audio files (${audioData.count})`}
+          value={formatBytes(audioData.size)}
+          textColor={isDarkMode ? '#e5e5ea' : '#3a3a3c'}
+          chevronColor={isDarkMode ? '#8e8e93' : '#c7c7cc'}
+        />
+        <LegendItem
+          color="#fca311"
+          label={`Documents (${docsData.count})`}
+          value={formatBytes(docsData.size)}
+          textColor={isDarkMode ? '#e5e5ea' : '#3a3a3c'}
+          chevronColor={isDarkMode ? '#8e8e93' : '#c7c7cc'}
+        />
       </View>
 
       <View style={[styles.settingRow, { marginTop: 30 }]}>

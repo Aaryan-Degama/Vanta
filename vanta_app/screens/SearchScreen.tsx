@@ -1,24 +1,52 @@
 import React, { useState, useRef } from 'react';
-import { View, 
-  Text, 
-  StyleSheet, 
-  TextInput, 
-  TouchableOpacity, 
-  Switch, 
-  Platform, 
-  ScrollView, 
-  Image, 
-  ActivityIndicator, 
+import {
+  View,
+  Text,
+  StyleSheet,
+  TextInput,
+  TouchableOpacity,
+  Platform,
+  ScrollView,
+  Image,
+  ActivityIndicator,
   Animated,
-  Keyboard } from 'react-native';
+  Keyboard,
+} from 'react-native';
 import { useTheme } from '../ThemeContext';
-import { useNavigation } from '@react-navigation/native';
+import { useNavigation, NavigationProp } from '@react-navigation/native';
 import { Ionicons } from '@expo/vector-icons';
+import type { RootStackParamList } from '../App';
 import { searchImages } from '../modules/vanta-bridge';
+import { useVantaError } from '../hooks/useVantaError';
 
-const StaggeredResultItem = ({ item, index, colors }: any) => {
-  const [displayItem, setDisplayItem] = useState(item);
-  const rotateAnim = useRef(new Animated.Value(0)).current; 
+/**
+ * Shape of a single search result returned by the native engine.
+ */
+interface SearchResultItem {
+  abs_path: string;
+  file_type?: string;
+  display_name?: string;
+  size?: number;
+  date_taken?: number;
+}
+
+/**
+ * Animated grid cell that flips when its item changes.
+ *
+ * `item` is the current search result. `index` is used to compute a diagonal
+ * stagger delay so the grid animates in a wave. `colors` comes from the theme.
+ */
+const StaggeredResultItem = ({
+  item,
+  index,
+  colors,
+}: {
+  item: SearchResultItem;
+  index: number;
+  colors: ReturnType<typeof useTheme>['colors'];
+}) => {
+  const [displayItem, setDisplayItem] = useState<SearchResultItem>(item);
+  const rotateAnim = useRef(new Animated.Value(0)).current;
 
   const col = index % 3;
   const row = Math.floor(index / 3);
@@ -48,20 +76,38 @@ const StaggeredResultItem = ({ item, index, colors }: any) => {
 
   const rotateY = rotateAnim.interpolate({
     inputRange: [-90, 0, 90],
-    outputRange: ['-90deg', '0deg', '90deg']
+    outputRange: ['-90deg', '0deg', '90deg'],
   });
 
   const rotateX = rotateAnim.interpolate({
     inputRange: [-90, 0, 90],
-    outputRange: ['-90deg', '0deg', '90deg']
+    outputRange: ['-90deg', '0deg', '90deg'],
   });
 
   return (
-    <Animated.View style={{ width: '33.33%', aspectRatio: 1, padding: 1, transform: [{ scaleY: -1 }, { rotateY }, { rotateX }] }}>
+    <Animated.View
+      style={{
+        width: '33.33%',
+        aspectRatio: 1,
+        padding: 1,
+        transform: [{ scaleY: -1 }, { rotateY }, { rotateX }],
+      }}
+    >
       {displayItem?.abs_path ? (
-        <Image source={{ uri: 'file://' + displayItem.abs_path }} style={{ width: '100%', height: '100%' }} />
+        <Image
+          source={{ uri: 'file://' + displayItem.abs_path }}
+          style={{ width: '100%', height: '100%' }}
+        />
       ) : (
-        <View style={{ width: '100%', height: '100%', backgroundColor: colors.chipBackground, justifyContent: 'center', alignItems: 'center' }}>
+        <View
+          style={{
+            width: '100%',
+            height: '100%',
+            backgroundColor: colors.chipBackground,
+            justifyContent: 'center',
+            alignItems: 'center',
+          }}
+        >
           <Ionicons name="image-outline" size={24} color={colors.text} />
         </View>
       )}
@@ -71,13 +117,15 @@ const StaggeredResultItem = ({ item, index, colors }: any) => {
 
 export default function SearchScreen() {
   const { colors } = useTheme();
-  const navigation = useNavigation<any>();
+  const navigation = useNavigation<NavigationProp<RootStackParamList>>();
   const [searchQuery, setSearchQuery] = useState('');
-  const [isExclusive, setIsExclusive] = useState(true);
-  const [results, setResults] = useState<any[]>([]);
+  const [results, setResults] = useState<SearchResultItem[]>([]);
   const [isSearching, setIsSearching] = useState(false);
-  const scrollViewRef = useRef<any>(null);
-  
+  // Ref to the results scroll view so we can scroll to top on new searches.
+  const scrollViewRef = useRef<ScrollView | null>(null);
+
+  const handleError = useVantaError('Search failed');
+
   const keyboardOffset = useRef(new Animated.Value(0)).current;
 
   React.useEffect(() => {
@@ -93,7 +141,7 @@ export default function SearchScreen() {
     );
     const hideSub = Keyboard.addListener(
       Platform.OS === 'ios' ? 'keyboardWillHide' : 'keyboardDidHide',
-      (e) => {
+      () => {
         Animated.timing(keyboardOffset, {
           toValue: 0,
           duration: 250,
@@ -107,86 +155,62 @@ export default function SearchScreen() {
     };
   }, []);
 
+  // Animated value that tracks the scroll position; wired to the search results
+  // scroll view so the UI can react to scrolling.
   const scrollY = useRef(new Animated.Value(0)).current;
-  const headerHeight = 70; // Distance to scroll up before header fully reveals
-  const clampedScrollY = Animated.diffClamp(scrollY, 0, headerHeight);
-  const translateY = clampedScrollY.interpolate({
-    inputRange: [0, headerHeight],
-    outputRange: [0, -headerHeight],
-  });
-
-
-
-  // Example state for filters
-  const [filters, setFilters] = useState([
-    { id: 'video', label: 'Video', active: false },
-    { id: 'audio', label: 'audio', active: false },
-    { id: 'images', label: 'Images', active: true },
-    { id: 'documents', label: 'Documents', active: false },
-  ]);
-
-  const toggleFilter = (id: string) => {
-    setFilters(filters.map(f => f.id === id ? { ...f, active: !f.active } : f));
-  };
 
   const handleSearch = async () => {
     if (!searchQuery.trim()) return;
-    
+
     // Jump back to the bottom (origin) for the new search
     scrollViewRef.current?.scrollTo({ y: 0, animated: true });
-    
+
     setIsSearching(true);
     try {
       const jsonRes = await searchImages(searchQuery);
       const parsedResults = JSON.parse(jsonRes);
       setResults(Array.isArray(parsedResults) ? parsedResults : []);
-    } catch (e) {
-      console.error('SEARCH ERROR:', e);
+    } catch (err) {
+      handleError(err);
     } finally {
       setIsSearching(false);
     }
   };
 
-  const formatBytes = (bytes: number) => {
-    if (!bytes || bytes === 0) return '0 B';
-    const k = 1024;
-    const sizes = ['B', 'KB', 'MB', 'GB', 'TB'];
-    const i = Math.floor(Math.log(bytes) / Math.log(k));
-    return parseFloat((bytes / Math.pow(k, i)).toFixed(2)) + ' ' + sizes[i];
-  };
-
-  const formatDate = (unix: number) => {
-    if (!unix) return '';
-    const d = new Date(unix * 1000);
-    return d.toLocaleDateString('en-GB', { day: 'numeric', month: 'short', year: 'numeric' }) + ' ' +
-      d.toLocaleTimeString('en-US', { hour: 'numeric', minute: '2-digit', hour12: true });
-  };
-
   return (
-    <View
-      style={[styles.container, { backgroundColor: colors.background }]}
-    >
-      <View style={[styles.header, { position: 'absolute', top: 50, left: 20, right: 20, zIndex: 10 }]}>
+    <View style={[styles.container, { backgroundColor: colors.background }]}>
+      <View
+        style={[styles.header, { position: 'absolute', top: 50, left: 20, right: 20, zIndex: 10 }]}
+      >
         <View style={{ width: 90, alignItems: 'flex-start' }}>
           {(results.length > 0 || isSearching) && (
-            <TouchableOpacity style={[styles.iconButton, { backgroundColor: 'rgba(0,0,0,0.6)' }]} onPress={() => {
-              setSearchQuery('');
-              setResults([]);
-            }}>
+            <TouchableOpacity
+              style={[styles.iconButton, { backgroundColor: 'rgba(0,0,0,0.6)' }]}
+              onPress={() => {
+                setSearchQuery('');
+                setResults([]);
+              }}
+            >
               <Ionicons name="chevron-back" size={24} color="#ffffff" />
             </TouchableOpacity>
           )}
         </View>
-        
+
         <Text style={{ color: '#ffffff', fontSize: 20, fontWeight: 'bold' }}>
           {results.length > 0 ? `${results.length} Results` : 'Search'}
         </Text>
 
         <View style={{ width: 90, flexDirection: 'row', justifyContent: 'flex-end' }}>
-          <TouchableOpacity style={[styles.iconButton, { backgroundColor: 'rgba(0,0,0,0.6)', marginRight: 10 }]} onPress={() => navigation.navigate('People')}>
+          <TouchableOpacity
+            style={[styles.iconButton, { backgroundColor: 'rgba(0,0,0,0.6)', marginRight: 10 }]}
+            onPress={() => navigation.navigate('People')}
+          >
             <Ionicons name="people" size={20} color="#ffffff" />
           </TouchableOpacity>
-          <TouchableOpacity style={[styles.iconButton, { backgroundColor: 'rgba(0,0,0,0.6)' }]} onPress={() => navigation.navigate('Settings')}>
+          <TouchableOpacity
+            style={[styles.iconButton, { backgroundColor: 'rgba(0,0,0,0.6)' }]}
+            onPress={() => navigation.navigate('Settings')}
+          >
             <Ionicons name="settings-sharp" size={20} color="#ffffff" />
           </TouchableOpacity>
         </View>
@@ -198,19 +222,30 @@ export default function SearchScreen() {
         contentContainerStyle={{ flexGrow: 1, paddingTop: 180, paddingBottom: 105 }}
         keyboardShouldPersistTaps="handled"
         showsVerticalScrollIndicator={false}
-        onScroll={Animated.event(
-          [{ nativeEvent: { contentOffset: { y: scrollY } } }],
-          { useNativeDriver: true }
-        )}
+        onScroll={Animated.event([{ nativeEvent: { contentOffset: { y: scrollY } } }], {
+          useNativeDriver: true,
+        })}
         scrollEventThrottle={16}
       >
         {/* Search Results List */}
         <View style={{ flex: 1 }}>
           {results.length === 0 && !isSearching ? (
-            <View style={{ flex: 1, justifyContent: 'center', alignItems: 'center', marginTop: '40%', transform: [{ scaleY: -1 }] }}>
+            <View
+              style={{
+                flex: 1,
+                justifyContent: 'center',
+                alignItems: 'center',
+                marginTop: '40%',
+                transform: [{ scaleY: -1 }],
+              }}
+            >
               <Ionicons name="images-outline" size={64} color="#8e8e93" />
-              <Text style={{ color: colors.text, fontSize: 20, fontWeight: 'bold', marginTop: 20 }}>Search your photos</Text>
-              <Text style={{ color: '#8e8e93', fontSize: 14, marginTop: 8 }}>Results will appear here in a grid</Text>
+              <Text style={{ color: colors.text, fontSize: 20, fontWeight: 'bold', marginTop: 20 }}>
+                Search your photos
+              </Text>
+              <Text style={{ color: '#8e8e93', fontSize: 14, marginTop: 8 }}>
+                Results will appear here in a grid
+              </Text>
             </View>
           ) : (
             <View style={{ flexDirection: 'row', flexWrap: 'wrap' }}>
@@ -221,7 +256,19 @@ export default function SearchScreen() {
           )}
 
           {isSearching && (
-            <View style={{ position: 'absolute', top: 0, left: 0, right: 0, bottom: 0, justifyContent: 'center', alignItems: 'center', backgroundColor: 'rgba(0,0,0,0.3)', transform: [{ scaleY: -1 }] }}>
+            <View
+              style={{
+                position: 'absolute',
+                top: 0,
+                left: 0,
+                right: 0,
+                bottom: 0,
+                justifyContent: 'center',
+                alignItems: 'center',
+                backgroundColor: 'rgba(0,0,0,0.3)',
+                transform: [{ scaleY: -1 }],
+              }}
+            >
               <ActivityIndicator size="large" color={colors.primary} />
             </View>
           )}
@@ -229,77 +276,21 @@ export default function SearchScreen() {
       </Animated.ScrollView>
 
       {/* Filters Section */}
-      <Animated.View style={[styles.bottomSection, { 
-        position: 'absolute', 
-        bottom: keyboardOffset, 
-        left: 0, 
-        right: 0, 
-        zIndex: 10,
-        backgroundColor: 'transparent', 
-        paddingHorizontal: 20, 
-        paddingBottom: Platform.OS === 'ios' ? 30 : 20 
-      }]}>
-        {/* Row 1 */}
-        <View style={styles.filterRow}>
-          {filters.slice(0, 2).map((filter) => (
-            <TouchableOpacity
-              key={filter.id}
-              style={[
-                styles.chip,
-                { backgroundColor: filter.active ? '#e5e5ea' : colors.chipBackground }
-              ]}
-              onPress={() => toggleFilter(filter.id)}
-            >
-              <Text style={[
-                styles.chipText,
-                { color: filter.active ? '#1c1c1e' : colors.chipText }
-              ]}>
-                {filter.label}
-              </Text>
-              {filter.active ? (
-                <Ionicons name="checkmark" size={14} color="#1c1c1e" style={styles.chipIconRight} />
-              ) : (
-                <Ionicons name="close" size={14} color={colors.chipText} style={styles.chipIconRight} />
-              )}
-            </TouchableOpacity>
-          ))}
-        </View>
-
-        {/* Row 2 */}
-        <View style={[styles.filterRow, { justifyContent: 'space-between' }]}>
-          <View style={styles.filterRow}>
-            {filters.slice(2, 4).map((filter) => (
-              <TouchableOpacity
-                key={filter.id}
-                style={[
-                  styles.chip,
-                  { backgroundColor: filter.active ? '#e5e5ea' : colors.chipBackground }
-                ]}
-                onPress={() => toggleFilter(filter.id)}
-              >
-                <Text style={[
-                  styles.chipText,
-                  { color: filter.active ? '#1c1c1e' : colors.chipText }
-                ]}>
-                  {filter.label}
-                </Text>
-                {filter.active ? (
-                  <Ionicons name="checkmark" size={14} color="#1c1c1e" style={styles.chipIconRight} />
-                ) : (
-                  <Ionicons name="close" size={14} color={colors.chipText} style={styles.chipIconRight} />
-                )}
-              </TouchableOpacity>
-            ))}
-          </View>
-          <Switch
-            value={isExclusive}
-            onValueChange={setIsExclusive}
-            trackColor={{ false: '#767577', true: colors.primary }}
-            thumbColor={'#ffffff'}
-            style={styles.switch}
-          />
-        </View>
-
+      <Animated.View
+        style={[
+          styles.bottomSection,
+          {
+            position: 'absolute',
+            bottom: keyboardOffset,
+            left: 0,
+            right: 0,
+            zIndex: 10,
+            backgroundColor: 'transparent',
+            paddingHorizontal: 20,
+            paddingBottom: Platform.OS === 'ios' ? 30 : 20,
+          },
+        ]}
+      >
         {/* Search Bar */}
         <View style={[styles.searchContainer, { backgroundColor: colors.searchBackground }]}>
           <Ionicons name="search" size={20} color="#8e8e93" style={styles.searchIcon} />
@@ -334,47 +325,17 @@ const styles = StyleSheet.create({
     borderRadius: 20,
     justifyContent: 'center',
     alignItems: 'center',
-    shadowColor: "#000",
+    shadowColor: '#000',
     shadowOffset: { width: 0, height: 1 },
     shadowOpacity: 0.1,
     shadowRadius: 2,
     elevation: 2,
-  },
-  title: {
-    fontSize: 34,
-    fontWeight: 'bold',
   },
   bottomSection: {
     width: '100%',
     marginTop: 10,
     // backgroundColor: "#FFF"
     // marginBottom: -70,
-  },
-  filterRow: {
-    flexDirection: 'row',
-    alignItems: 'center',
-    marginBottom: 10,
-  },
-  chip: {
-    flexDirection: 'row',
-    alignItems: 'center',
-    paddingVertical: 6,
-    paddingHorizontal: 12,
-    borderRadius: 20,
-    marginRight: 10,
-  },
-  chipIcon: {
-    marginRight: 4,
-  },
-  chipIconRight: {
-    marginLeft: 6,
-  },
-  chipText: {
-    fontSize: 12,
-    fontWeight: '500',
-  },
-  switch: {
-    marginLeft: 10,
   },
   searchContainer: {
     flexDirection: 'row',
@@ -391,54 +352,5 @@ const styles = StyleSheet.create({
   searchInput: {
     flex: 1,
     fontSize: 15,
-  },
-  resultItem: {
-    flexDirection: 'row',
-    alignItems: 'center',
-    paddingVertical: 12,
-    borderBottomWidth: StyleSheet.hairlineWidth,
-    borderBottomColor: '#3a3a3c',
-  },
-  resultImageContainer: {
-    marginRight: 15,
-  },
-  resultImage: {
-    width: 60,
-    height: 60,
-    borderRadius: 8,
-  },
-  resultImagePlaceholder: {
-    width: 60,
-    height: 60,
-    borderRadius: 8,
-    justifyContent: 'center',
-    alignItems: 'center',
-  },
-  resultDetails: {
-    flex: 1,
-    justifyContent: 'center',
-  },
-  resultTitle: {
-    fontSize: 16,
-    fontWeight: '500',
-    marginBottom: 4,
-  },
-  resultApp: {
-    fontSize: 14,
-    color: '#ff9f0a', // Orange color similar to the screenshot
-    marginBottom: 4,
-  },
-  resultFooter: {
-    flexDirection: 'row',
-    justifyContent: 'space-between',
-    alignItems: 'center',
-  },
-  resultDate: {
-    fontSize: 12,
-    color: '#8e8e93',
-  },
-  resultSize: {
-    fontSize: 13,
-    fontWeight: '600',
   },
 });

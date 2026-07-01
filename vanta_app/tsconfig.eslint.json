@@ -1,0 +1,20 @@
+{
+  // TypeScript project used by typescript-eslint for type-aware linting.
+  // It extends the main tsconfig and also includes config/test/mock files
+  // that are not part of the app bundle but still need to be linted.
+  "extends": "./tsconfig.json",
+  "include": [
+    "App.tsx",
+    "index.ts",
+    "ThemeContext.tsx",
+    "screens/**/*",
+    "modules/**/*",
+    "__tests__/**/*",
+    "__mocks__/**/*",
+    "jest.setup.js",
+    "jest.config.js",
+    "*.config.js",
+    ".eslintrc.js"
+  ],
+  "exclude": ["node_modules", "android", "ios", ".expo"]
+}

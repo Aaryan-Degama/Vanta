@@ -1,5 +1,17 @@
 import React, { useEffect, useState } from 'react';
-import { View, Text, FlatList, ActivityIndicator, Pressable, StyleSheet, Dimensions, Image, Modal, TextInput, Button } from 'react-native';
+import {
+  View,
+  Text,
+  FlatList,
+  ActivityIndicator,
+  Pressable,
+  StyleSheet,
+  Dimensions,
+  Image,
+  Modal,
+  TextInput,
+  Button,
+} from 'react-native';
 import { useNavigation } from '@react-navigation/native';
 import VantaEngine from '../modules/vanta-bridge/src/VantaEngineModule';
 import { EntityMeta, FaceCrop } from '../modules/vanta-bridge/src/VantaEngine.types';
@@ -9,7 +21,15 @@ const SCREEN_WIDTH = Dimensions.get('window').width;
 const NUM_COLUMNS = 3;
 const CELL_WIDTH = SCREEN_WIDTH / NUM_COLUMNS;
 
-const FaceCell = ({ entity, colors, onNamed }: { entity: EntityMeta; colors: any; onNamed: (id: number, name: string) => void }) => {
+const FaceCell = ({
+  entity,
+  colors,
+  onNamed,
+}: {
+  entity: EntityMeta;
+  colors: any;
+  onNamed: (id: number, name: string) => void;
+}) => {
   const [crop, setCrop] = useState<FaceCrop | null>(null);
   const [imgSize, setImgSize] = useState<{ width: number; height: number } | null>(null);
   const [modalVisible, setModalVisible] = useState(false);
@@ -24,23 +44,30 @@ const FaceCell = ({ entity, colors, onNamed }: { entity: EntityMeta; colors: any
           const parsed = JSON.parse(jsonStr) as FaceCrop;
           if (parsed.file_id !== -1 && mounted) {
             setCrop(parsed);
-            Image.getSize(`file://${parsed.abs_path}`, (width, height) => {
-              if (mounted) setImgSize({ width, height });
-            }, (error) => {
-              console.error("Failed to get image size", error);
-            });
+            Image.getSize(
+              `file://${parsed.abs_path}`,
+              (width, height) => {
+                if (mounted) setImgSize({ width, height });
+              },
+              (error) => {
+                console.error('Failed to get image size', error);
+              }
+            );
           }
         }
       } catch (error) {
-        console.error("Failed to fetch crop", error);
+        console.error('Failed to fetch crop', error);
       }
     };
 
     fetchCrop();
-    return () => { mounted = false; };
+    return () => {
+      mounted = false;
+    };
   }, [entity.entity_id]);
 
-  const displayName = entity.display_name && entity.display_name.trim() !== '' ? entity.display_name : 'Unnamed';
+  const displayName =
+    entity.display_name && entity.display_name.trim() !== '' ? entity.display_name : 'Unnamed';
   const IMAGE_SIZE = CELL_WIDTH - 12;
 
   const navigation = useNavigation<any>();
@@ -62,10 +89,10 @@ const FaceCell = ({ entity, colors, onNamed }: { entity: EntityMeta; colors: any
         onNamed(entity.entity_id, inputValue.trim());
         setModalVisible(false);
       } else {
-        console.error("Failed to set entity name");
+        console.error('Failed to set entity name');
       }
     } catch (error) {
-      console.error("Error setting entity name", error);
+      console.error('Error setting entity name', error);
     }
   };
 
@@ -81,14 +108,24 @@ const FaceCell = ({ entity, colors, onNamed }: { entity: EntityMeta; colors: any
     const translateX = -(crop.bbox_x + crop.bbox_w / 2 - imgSize.width / 2) * scale;
     const translateY = -(crop.bbox_y + crop.bbox_h / 2 - imgSize.height / 2) * scale;
     imageContent = (
-      <View style={[styles.placeholderImage, { backgroundColor: colors.surface, overflow: 'hidden', justifyContent: 'center', alignItems: 'center' }]}>
-        <Image 
-          source={{ uri: `file://${crop.abs_path}` }} 
-          style={{ 
-            width: imgSize.width * scale, 
-            height: imgSize.height * scale, 
-            transform: [{ translateX }, { translateY }] 
-          }} 
+      <View
+        style={[
+          styles.placeholderImage,
+          {
+            backgroundColor: colors.surface,
+            overflow: 'hidden',
+            justifyContent: 'center',
+            alignItems: 'center',
+          },
+        ]}
+      >
+        <Image
+          source={{ uri: `file://${crop.abs_path}` }}
+          style={{
+            width: imgSize.width * scale,
+            height: imgSize.height * scale,
+            transform: [{ translateX }, { translateY }],
+          }}
         />
       </View>
     );
@@ -107,9 +144,9 @@ const FaceCell = ({ entity, colors, onNamed }: { entity: EntityMeta; colors: any
           <View style={[styles.modalContent, { backgroundColor: colors.surface }]}>
             <Text style={[styles.modalTitle, { color: colors.text }]}>Name this person</Text>
             {imageContent}
-            <TextInput 
-              style={[styles.input, { color: colors.text, borderColor: colors.border }]} 
-              placeholder="Enter name..." 
+            <TextInput
+              style={[styles.input, { color: colors.text, borderColor: colors.border }]}
+              placeholder="Enter name..."
               placeholderTextColor={colors.text + '80'}
               value={inputValue}
               onChangeText={setInputValue}
@@ -138,7 +175,7 @@ export const PeopleScreen = () => {
         const parsed = JSON.parse(jsonStr) as EntityMeta[];
         setEntities(parsed);
       } catch (error) {
-        console.error("Failed to load entities:", error);
+        console.error('Failed to load entities:', error);
       } finally {
         setLoading(false);
       }
@@ -156,7 +193,9 @@ export const PeopleScreen = () => {
   }
 
   const handleNameUpdate = (id: number, newName: string) => {
-    setEntities(prev => prev.map(e => e.entity_id === id ? { ...e, display_name: newName } : e));
+    setEntities((prev) =>
+      prev.map((e) => (e.entity_id === id ? { ...e, display_name: newName } : e))
+    );
   };
 
   const renderItem = ({ item }: { item: EntityMeta }) => {

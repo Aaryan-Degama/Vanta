@@ -1,0 +1,79 @@
+# Continuous integration workflow for the Vanta app.
+#
+# Runs on every push and pull request to main. It validates TypeScript,
+# enforces the project lint rules, checks formatting, and runs the Jest test
+# suite. The Android native build is also compiled to catch JNI/C++ regressions.
+name: CI
+
+on:
+  push:
+    branches: [main]
+  pull_request:
+    branches: [main]
+
+jobs:
+  js-checks:
+    name: JavaScript / TypeScript checks
+    runs-on: ubuntu-latest
+
+    steps:
+      # Checkout the repository.
+      - name: Checkout
+        uses: actions/checkout@v4
+
+      # Set up Node.js. This must match the version pinned in package.json.
+      - name: Setup Node
+        uses: actions/setup-node@v4
+        with:
+          node-version-file: package.json
+          cache: npm
+
+      # Install dependencies without running post-install scripts unnecessarily.
+      - name: Install dependencies
+        run: npm ci
+
+      # Run Prettier in check mode so CI fails on unformatted code.
+      - name: Check formatting
+        run: npm run format:check
+
+      # Run ESLint. The config treats warnings as non-fatal but errors fail CI.
+      - name: Lint
+        run: npm run lint
+
+      # Run TypeScript type checking.
+      - name: Type check
+        run: npm run typecheck
+
+      # Run the Jest test suite.
+      - name: Test
+        run: npm test
+
+  android-build:
+    name: Android native build
+    runs-on: ubuntu-latest
+
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+
+      - name: Setup Node
+        uses: actions/setup-node@v4
+        with:
+          node-version-file: package.json
+          cache: npm
+
+      - name: Install dependencies
+        run: npm ci
+
+      # Set up JDK 17 required by the Android Gradle Plugin.
+      - name: Setup JDK
+        uses: actions/setup-java@v4
+        with:
+          distribution: temurin
+          java-version: 17
+
+      # Validate that the vanta-bridge native module compiles. The full app
+      # build requires Android SDK + NDK setup, which is heavier; the module
+      # build catches C++/Kotlin/Kotlin interface regressions quickly.
+      - name: Build vanta-bridge
+        run: cd android && ./gradlew :vanta-bridge:assembleDebug
