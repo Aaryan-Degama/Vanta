@@ -13,6 +13,7 @@
 #include <algorithm>
 #include <cmath>
 #include <numeric>
+#include <sstream>
 
 #define LOG_TAG "VantaQueryEngine"
 #define LOGE(...) __android_log_print(ANDROID_LOG_ERROR, LOG_TAG, __VA_ARGS__)
@@ -21,11 +22,77 @@
 static VantaProductionAnalyzer* g_analyzer = nullptr;
 static vanta::query::IntentBuilder* g_intent_builder = nullptr;
 
-bool init_query_engine() {
+// ── Helper: lowercase ──
+static std::string to_lower(const std::string& s) {
+    std::string out = s;
+    std::transform(out.begin(), out.end(), out.begin(),
+        [](unsigned char c) { return std::tolower(c); });
+    return out;
+}
+
+bool init_query_engine(const std::string& db_path) {
     // In the future, this will initialize the text tokenizer and text ONNX model.
     if (!g_analyzer) {
         SymSpellDictionary dict;
-        std::vector<std::string> whitelist = {"sun", "moon", "car", "tree", "dog", "cat"}; // Populated for testing
+        std::vector<std::string> whitelist;
+
+        // Add static relation and place/event terms matching IntentBuilder
+        std::vector<std::string> static_terms = {
+            "me", "myself", "self", "family", "group", "people",
+            "father", "dad", "mother", "mom", "brother", "sister", 
+            "friend", "friends", "wife", "husband", "uncle", "aunt", "cousin",
+            "beach", "mountain", "mountains", "kedarnath", "temple", 
+            "office", "school", "home", "park", "restaurant",
+            "graduation", "birthday", "wedding", "diwali", "holi", 
+            "festival", "vacation", "trip"
+        };
+        for (const auto& term : static_terms) {
+            whitelist.push_back(to_lower(term));
+        }
+
+        if (!db_path.empty()) {
+            sqlite3* db = nullptr;
+            sqlite3_auto_extension((void (*)())sqlite3_vec_init);
+            if (sqlite3_open_v2(db_path.c_str(), &db, SQLITE_OPEN_READONLY, nullptr) == SQLITE_OK) {
+                // Person names
+                const char* person_sql = "SELECT display_name FROM entities WHERE entity_type = 'person' AND display_name IS NOT NULL AND display_name != ''";
+                sqlite3_stmt* stmt = nullptr;
+                if (sqlite3_prepare_v2(db, person_sql, -1, &stmt, nullptr) == SQLITE_OK) {
+                    while (sqlite3_step(stmt) == SQLITE_ROW) {
+                        const char* text = reinterpret_cast<const char*>(sqlite3_column_text(stmt, 0));
+                        if (text) {
+                            std::string dn(text);
+                            std::istringstream iss(dn);
+                            std::string token;
+                            while (iss >> token) {
+                                whitelist.push_back(to_lower(token));
+                            }
+                        }
+                    }
+                    sqlite3_finalize(stmt);
+                }
+
+                // Relation terms
+                const char* rel_sql = "SELECT DISTINCT relation FROM entities WHERE relation IS NOT NULL AND relation != ''";
+                if (sqlite3_prepare_v2(db, rel_sql, -1, &stmt, nullptr) == SQLITE_OK) {
+                    while (sqlite3_step(stmt) == SQLITE_ROW) {
+                        const char* text = reinterpret_cast<const char*>(sqlite3_column_text(stmt, 0));
+                        if (text) {
+                            std::string rel(text);
+                            std::istringstream iss(rel);
+                            std::string token;
+                            while (iss >> token) {
+                                whitelist.push_back(to_lower(token));
+                            }
+                        }
+                    }
+                    sqlite3_finalize(stmt);
+                }
+
+                sqlite3_close(db);
+            }
+        }
+
         g_analyzer = new VantaProductionAnalyzer(dict, whitelist);
     }
     if (!g_intent_builder) {
@@ -35,9 +102,18 @@ bool init_query_engine() {
     return true;
 }
 
-std::string get_corrected_query(const std::string& raw_query) {
+void rebuild_query_engine_dictionary(const std::string& db_path) {
+    if (g_analyzer) {
+        delete g_analyzer;
+        g_analyzer = nullptr;
+    }
+    init_query_engine(db_path);
+    LOGI("Query engine dictionary rebuilt.");
+}
+
+std::string get_corrected_query(const std::string& raw_query, const std::string& db_path) {
     if (!g_analyzer) {
-        init_query_engine();
+        init_query_engine(db_path);
     }
     QueryAnalysis analysis = g_analyzer->analyze(raw_query);
     if (analysis.was_corrected) {
@@ -46,13 +122,6 @@ std::string get_corrected_query(const std::string& raw_query) {
     return analysis.corrected_query;
 }
 
-// ── Helper: lowercase ──
-static std::string to_lower(const std::string& s) {
-    std::string out = s;
-    std::transform(out.begin(), out.end(), out.begin(),
-        [](unsigned char c) { return std::tolower(c); });
-    return out;
-}
 
 // ── Damerau-Levenshtein distance (integer) ──
 int damerau_levenshtein(const std::string& s1, const std::string& s2) {
@@ -168,7 +237,7 @@ std::vector<search_result> search_images(
     }
 
     // ── Step 1: Typo-correct ──
-    std::string corrected_query = get_corrected_query(raw_query);
+    std::string corrected_query = get_corrected_query(raw_query, db_path);
     LOGI("search_images: raw='%s' corrected='%s'", raw_query.c_str(), corrected_query.c_str());
 
     // ── Step 2: Run NER ──

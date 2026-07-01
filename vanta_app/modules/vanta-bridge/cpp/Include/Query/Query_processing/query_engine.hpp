@@ -22,10 +22,13 @@ namespace vanta { namespace ner { class NERModel; } }
 struct EntityCandidate;
 
 // Initializes the query engine, loading any necessary text models.
-bool init_query_engine();
+bool init_query_engine(const std::string& db_path = "");
+
+// Rebuilds the query engine dictionary dynamically from the database.
+void rebuild_query_engine_dictionary(const std::string& db_path);
 
 // Corrects the query using the typo rectifier
-std::string get_corrected_query(const std::string& raw_query);
+std::string get_corrected_query(const std::string& raw_query, const std::string& db_path = "");
 
 // Integer Damerau-Levenshtein distance between two strings.
 int damerau_levenshtein(const std::string& s1, const std::string& s2);

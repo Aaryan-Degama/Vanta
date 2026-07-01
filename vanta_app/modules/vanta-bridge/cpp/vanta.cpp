@@ -634,6 +634,9 @@ Java_expo_modules_vantaengine_VantaEngineModule_setEntityNameNative(
     }
 
     bool success = set_entity_name(db, static_cast<int64_t>(entityId), entity_name);
+    if (success) {
+        rebuild_query_engine_dictionary(db_path);
+    }
 
     sqlite3_close(db);
 
@@ -762,6 +765,9 @@ Java_expo_modules_vantaengine_VantaEngineModule_setEntityMetadataNative(
     bool success = set_entity_metadata(db, static_cast<int64_t>(entityId),
                                        entity_name, entity_relation,
                                        static_cast<int>(age), entity_location);
+    if (success) {
+        rebuild_query_engine_dictionary(db_path);
+    }
 
     sqlite3_close(db);
     return success ? JNI_TRUE : JNI_FALSE;
