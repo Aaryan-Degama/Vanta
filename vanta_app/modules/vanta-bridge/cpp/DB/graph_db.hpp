@@ -44,6 +44,8 @@ struct FaceCrop {
     int bbox_y;
     int bbox_w;
     int bbox_h;
+    std::string aligned_crop_path;
+    float det_score;
 };
 
 struct NeighborResult {

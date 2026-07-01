@@ -19,6 +19,7 @@ class IndexingService : Service() {
     }
 
     private external fun setModelsDirNative(modelsDir: String)
+    private external fun setCropsDirNative(cropsDir: String)
     private external fun generateEmbeddingsNative(dbPath: String): Boolean
 
     private var indexingThread: Thread? = null
@@ -52,7 +53,9 @@ class IndexingService : Service() {
                     try {
                         extractAssetsIfNeeded(this)
                         val modelsDir = VantaEngineConfig.getModelsDirectory(this)
+                        val cropsDir = VantaEngineConfig.getCropsDirectory(this)
                         setModelsDirNative(modelsDir)
+                        setCropsDirNative(cropsDir)
                         generateEmbeddingsNative(dbPath)
                     } catch (e: Exception) {
                         e.printStackTrace()

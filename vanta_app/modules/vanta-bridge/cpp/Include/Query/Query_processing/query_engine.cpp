@@ -3,17 +3,14 @@
 #include "ner.hpp"
 #include "graph_db.hpp"
 #include "IntentBuilder.hpp"
-#include <iostream>
-#include <android/log.h>
-#define SQLITE_CORE 1
-#include "sqlite-vec.h"
-#include <random>
-#include <unordered_set>
-#include <unordered_map>
 #include <algorithm>
 #include <cmath>
-#include <numeric>
 #include <sstream>
+#include <unordered_set>
+#include <android/log.h>
+
+#define SQLITE_CORE 1
+#include "sqlite-vec.h"
 
 #define LOG_TAG "VantaQueryEngine"
 #define LOGE(...) __android_log_print(ANDROID_LOG_ERROR, LOG_TAG, __VA_ARGS__)
@@ -26,24 +23,30 @@ static vanta::query::IntentBuilder* g_intent_builder = nullptr;
 static std::string to_lower(const std::string& s) {
     std::string out = s;
     std::transform(out.begin(), out.end(), out.begin(),
-        [](unsigned char c) { return std::tolower(c); });
+                   [](unsigned char c) { return std::tolower(c); });
     return out;
 }
 
+// ── Helper: strip possessive suffix ──
+static std::string strip_possessive(const std::string& s) {
+    if (s.size() > 2 && s.substr(s.size() - 2) == "'s") {
+        return s.substr(0, s.size() - 2);
+    }
+    return s;
+}
+
 bool init_query_engine(const std::string& db_path) {
-    // In the future, this will initialize the text tokenizer and text ONNX model.
     if (!g_analyzer) {
         SymSpellDictionary dict;
         std::vector<std::string> whitelist;
 
-        // Add static relation and place/event terms matching IntentBuilder
         std::vector<std::string> static_terms = {
             "me", "myself", "self", "family", "group", "people",
-            "father", "dad", "mother", "mom", "brother", "sister", 
+            "father", "dad", "mother", "mom", "brother", "sister",
             "friend", "friends", "wife", "husband", "uncle", "aunt", "cousin",
-            "beach", "mountain", "mountains", "kedarnath", "temple", 
+            "beach", "mountain", "mountains", "kedarnath", "temple",
             "office", "school", "home", "park", "restaurant",
-            "graduation", "birthday", "wedding", "diwali", "holi", 
+            "graduation", "birthday", "wedding", "diwali", "holi",
             "festival", "vacation", "trip"
         };
         for (const auto& term : static_terms) {
@@ -54,7 +57,6 @@ bool init_query_engine(const std::string& db_path) {
             sqlite3* db = nullptr;
             sqlite3_auto_extension((void (*)())sqlite3_vec_init);
             if (sqlite3_open_v2(db_path.c_str(), &db, SQLITE_OPEN_READONLY, nullptr) == SQLITE_OK) {
-                // Person names
                 const char* person_sql = "SELECT display_name FROM entities WHERE entity_type = 'person' AND display_name IS NOT NULL AND display_name != ''";
                 sqlite3_stmt* stmt = nullptr;
                 if (sqlite3_prepare_v2(db, person_sql, -1, &stmt, nullptr) == SQLITE_OK) {
@@ -72,7 +74,6 @@ bool init_query_engine(const std::string& db_path) {
                     sqlite3_finalize(stmt);
                 }
 
-                // Relation terms
                 const char* rel_sql = "SELECT DISTINCT relation FROM entities WHERE relation IS NOT NULL AND relation != ''";
                 if (sqlite3_prepare_v2(db, rel_sql, -1, &stmt, nullptr) == SQLITE_OK) {
                     while (sqlite3_step(stmt) == SQLITE_ROW) {
@@ -122,17 +123,14 @@ std::string get_corrected_query(const std::string& raw_query, const std::string&
     return analysis.corrected_query;
 }
 
-
 // ── Damerau-Levenshtein distance (integer) ──
 int damerau_levenshtein(const std::string& s1, const std::string& s2) {
     int len1 = static_cast<int>(s1.size());
     int len2 = static_cast<int>(s2.size());
 
-    // Quick exit for empty strings
     if (len1 == 0) return len2;
     if (len2 == 0) return len1;
 
-    // 1D vector mapped as 2D: (len1+1) x (len2+1)
     std::vector<int> d((len1 + 1) * (len2 + 1));
     auto at = [&](int i, int j) -> int& { return d[i * (len2 + 1) + j]; };
 
@@ -143,11 +141,10 @@ int damerau_levenshtein(const std::string& s1, const std::string& s2) {
         for (int j = 1; j <= len2; ++j) {
             int cost = (std::tolower(s1[i - 1]) == std::tolower(s2[j - 1])) ? 0 : 1;
             at(i, j) = std::min({
-                at(i - 1, j) + 1,          // deletion
-                at(i, j - 1) + 1,          // insertion
-                at(i - 1, j - 1) + cost    // substitution
+                at(i - 1, j) + 1,
+                at(i, j - 1) + 1,
+                at(i - 1, j - 1) + cost
             });
-            // Transposition
             if (i > 1 && j > 1 &&
                 std::tolower(s1[i - 1]) == std::tolower(s2[j - 2]) &&
                 std::tolower(s1[i - 2]) == std::tolower(s2[j - 1])) {
@@ -165,18 +162,21 @@ int64_t resolve_span_to_entity_id(
     const std::vector<EntityCandidate>& candidates,
     int64_t /*owner_entity_id*/) {
 
-    // Strip leading "my " (case-insensitive)
     std::string lower = to_lower(span_text);
+    
+    // Strip leading "my "
     if (lower.size() > 3 && lower.substr(0, 3) == "my ") {
         lower = lower.substr(3);
     }
+    
+    // Strip trailing "'s" possessive
+    lower = strip_possessive(lower);
 
-    int best_dist = 3;   // reject anything above 2
+    int best_dist = 3;
     int64_t best_id = -1;
     int best_count = 0;
 
     for (const auto& c : candidates) {
-        // Check against display_name AND relation
         std::string dn = to_lower(c.display_name);
         std::string rel = to_lower(c.relation);
 
@@ -185,7 +185,6 @@ int64_t resolve_span_to_entity_id(
             rel.empty() ? 999 : damerau_levenshtein(lower, rel)
         );
 
-        // Prefer lower dist; tie-break on higher sample_count
         if (d < best_dist || (d == best_dist && c.sample_count > best_count)) {
             best_dist = d;
             best_id = c.entity_id;
@@ -200,13 +199,139 @@ int64_t resolve_span_to_entity_id(
     return best_dist <= 2 ? best_id : -1;
 }
 
-// ── Dot product (cosine similarity for normalized vectors) ──
+// ── Dot product ──
 static float dot_product(const float* a, const float* b, int dim) {
     float sum = 0.0f;
     for (int i = 0; i < dim; ++i) {
         sum += a[i] * b[i];
     }
     return sum;
+}
+
+// ── NEW: Fallback entity extraction from raw query words ──
+static void fallback_entity_resolution(
+    const std::string& query,
+    std::vector<int64_t>& resolved_entity_ids,
+    std::unordered_set<std::string>& resolved_span_texts,
+    const std::string& db_path,
+    int64_t owner_entity_id) {
+
+    sqlite3* db = nullptr;
+    sqlite3_auto_extension((void (*)())sqlite3_vec_init);
+    if (sqlite3_open_v2(db_path.c_str(), &db, SQLITE_OPEN_READONLY, nullptr) != SQLITE_OK) {
+        return;
+    }
+
+    std::vector<EntityCandidate> candidates = get_all_person_entities(db);
+    sqlite3_close(db);
+
+    if (candidates.empty()) return;
+
+    static const std::unordered_set<std::string> fillers = {
+        "show", "me", "pictures", "picture", "photos", "photo", "of", "and", "in", "at",
+        "on", "the", "a", "an", "please", "find", "my", "some", "i", "want", "to", "see",
+        "with", "images", "image", "give", "looking", "for", "pics", "pic"
+    };
+
+    std::istringstream iss(query);
+    std::string word;
+    while (iss >> word) {
+        std::string lw = to_lower(word);
+        lw = strip_possessive(lw);
+        
+        if (fillers.count(lw)) continue;
+        if (lw.size() < 3) continue; // Skip short words
+
+        // Try to resolve this word as an entity name or relation
+        int64_t eid = resolve_span_to_entity_id(word, candidates, owner_entity_id);
+        if (eid != -1) {
+            // Avoid duplicate resolutions
+            bool already_resolved = false;
+            for (int64_t existing : resolved_entity_ids) {
+                if (existing == eid) { already_resolved = true; break; }
+            }
+            if (!already_resolved) {
+                resolved_entity_ids.push_back(eid);
+                resolved_span_texts.insert(lw);
+                LOGI("Fallback resolved word '%s' → entity %ld", word.c_str(), (long)eid);
+            }
+        }
+    }
+}
+
+// ── NEW: Verify that all required entities have face detections in the file ──
+static bool verify_entities_in_file(sqlite3* db, int64_t file_id, const std::vector<int64_t>& entity_ids) {
+    if (entity_ids.empty()) return true;
+    
+    std::string sql = "SELECT DISTINCT entity_id FROM face_detections WHERE file_id = ? AND entity_id IN (";
+    for (size_t i = 0; i < entity_ids.size(); ++i) {
+        if (i > 0) sql += ",";
+        sql += std::to_string(entity_ids[i]);
+    }
+    sql += ")";
+    
+    sqlite3_stmt* stmt = nullptr;
+    if (sqlite3_prepare_v2(db, sql.c_str(), -1, &stmt, nullptr) != SQLITE_OK) {
+        return false;
+    }
+    sqlite3_bind_int64(stmt, 1, file_id);
+    
+    std::unordered_set<int64_t> found;
+    while (sqlite3_step(stmt) == SQLITE_ROW) {
+        found.insert(sqlite3_column_int64(stmt, 0));
+    }
+    sqlite3_finalize(stmt);
+    
+    return found.size() == entity_ids.size();
+}
+
+// ── NEW: Get combined membership score for multi-entity ranking ──
+static std::unordered_map<int64_t, float> get_combined_membership_scores(
+    sqlite3* db,
+    const std::vector<int64_t>& entity_ids,
+    const std::vector<int64_t>& candidate_file_ids) {
+    
+    std::unordered_map<int64_t, float> scores;
+    if (entity_ids.empty() || candidate_file_ids.empty()) return scores;
+    
+    // Build temp candidate set for fast lookup
+    std::unordered_set<int64_t> cand_set(candidate_file_ids.begin(), candidate_file_ids.end());
+    
+    // For each file, compute MIN score across all required entities
+    // (A file is only as good as its weakest match)
+    std::string sql = "SELECT file_id, entity_id, score FROM entity_memberships WHERE entity_id IN (";
+    for (size_t i = 0; i < entity_ids.size(); ++i) {
+        if (i > 0) sql += ",";
+        sql += std::to_string(entity_ids[i]);
+    }
+    sql += ")";
+    
+    sqlite3_stmt* stmt = nullptr;
+    if (sqlite3_prepare_v2(db, sql.c_str(), -1, &stmt, nullptr) != SQLITE_OK) {
+        return scores;
+    }
+    
+    std::unordered_map<int64_t, std::vector<float>> file_scores;
+    while (sqlite3_step(stmt) == SQLITE_ROW) {
+        int64_t fid = sqlite3_column_int64(stmt, 0);
+        if (cand_set.count(fid)) {
+            float sc = static_cast<float>(sqlite3_column_double(stmt, 2));
+            file_scores[fid].push_back(sc);
+        }
+    }
+    sqlite3_finalize(stmt);
+    
+    for (const auto& kv : file_scores) {
+        if (kv.second.size() == entity_ids.size()) {
+            float min_score = kv.second[0];
+            for (float s : kv.second) {
+                if (s < min_score) min_score = s;
+            }
+            scores[kv.first] = min_score;
+        }
+    }
+    
+    return scores;
 }
 
 // ── Main search pipeline ──
@@ -231,7 +356,6 @@ std::vector<search_result> search_images(
         return results;
     }
 
-    // Ensure intent builder is initialized
     if (!g_intent_builder) {
         g_intent_builder = new vanta::query::IntentBuilder();
     }
@@ -246,20 +370,16 @@ std::vector<search_result> search_images(
         spans = ner_model->run(corrected_query);
         LOGI("NER returned %zu spans", spans.size());
         for (const auto& sp : spans) {
-            LOGI("  span: label='%s' text='%s'", sp.label.c_str(), sp.text.c_str());
+            LOGI(" span: label='%s' text='%s'", sp.label.c_str(), sp.text.c_str());
         }
     }
 
     // ── Step 3: Resolve spans ──
     std::vector<int64_t> resolved_entity_ids;
     std::vector<std::string> unresolved_words;
-
-    // Track which word positions in the corrected query are covered by resolved spans
-    // We'll use a simpler approach: track the text of resolved spans
     std::unordered_set<std::string> resolved_span_texts;
 
     if (!spans.empty()) {
-        // Open DB to get person entities for resolution
         sqlite3* resolve_db = nullptr;
         sqlite3_auto_extension((void (*)())sqlite3_vec_init);
         if (sqlite3_open_v2(db_path.c_str(), &resolve_db, SQLITE_OPEN_READONLY, nullptr) == SQLITE_OK) {
@@ -285,17 +405,25 @@ std::vector<search_result> search_images(
                         LOGI("PERSON span '%s' unresolved, keeping for CLIP", span.text.c_str());
                         unresolved_words.push_back(span.text);
                     }
+                } else if (span.label == "RELATION") {
+                    // FIX #1: Resolve RELATION spans against entity relation column
+                    int64_t eid = resolve_span_to_entity_id(span.text, candidates, owner_entity_id);
+                    if (eid != -1) {
+                        resolved_entity_ids.push_back(eid);
+                        resolved_span_texts.insert(to_lower(span.text));
+                        LOGI("RELATION span '%s' → entity %ld", span.text.c_str(), (long)eid);
+                    } else {
+                        LOGI("RELATION span '%s' unresolved, keeping for CLIP", span.text.c_str());
+                        unresolved_words.push_back(span.text);
+                    }
                 }
-                // RELATION spans: ignored for entity resolution (just connectors)
             }
         }
 
-        // Deduplicate entity IDs
         std::sort(resolved_entity_ids.begin(), resolved_entity_ids.end());
         resolved_entity_ids.erase(
             std::unique(resolved_entity_ids.begin(), resolved_entity_ids.end()),
             resolved_entity_ids.end());
-        // Remove -1s if any snuck in
         resolved_entity_ids.erase(
             std::remove(resolved_entity_ids.begin(), resolved_entity_ids.end(), -1),
             resolved_entity_ids.end());
@@ -304,19 +432,26 @@ std::vector<search_result> search_images(
              resolved_entity_ids.size(), unresolved_words.size());
     }
 
+    // ── FIX #2: Fallback entity extraction when NER returns nothing ──
+    if (resolved_entity_ids.empty() && !corrected_query.empty()) {
+        LOGI("NER returned no resolvable spans. Trying fallback word-by-word entity resolution.");
+        fallback_entity_resolution(corrected_query, resolved_entity_ids, resolved_span_texts,
+                                   db_path, owner_entity_id);
+        LOGI("Fallback resolved %zu entity IDs", resolved_entity_ids.size());
+    }
+
     // ── Step 4: Build CLIP caption ──
     std::string clip_caption;
     {
-        // Take corrected_query words NOT covered by resolved spans
         std::string cleaned;
         std::istringstream iss(corrected_query);
         std::string word;
         while (iss >> word) {
             std::string lw = to_lower(word);
-            // Check if this word is part of any resolved span text
+            lw = strip_possessive(lw);
             bool covered = false;
             for (const auto& st : resolved_span_texts) {
-                if (st.find(lw) != std::string::npos) {
+                if (st.find(lw) != std::string::npos || lw.find(st) != std::string::npos) {
                     covered = true;
                     break;
                 }
@@ -327,17 +462,14 @@ std::vector<search_result> search_images(
             }
         }
 
-        // Append unresolved words
         for (const auto& uw : unresolved_words) {
             if (!cleaned.empty()) cleaned += " ";
             cleaned += uw;
         }
 
-        // Pass through IntentBuilder for CLIP-friendly description
         if (!cleaned.empty()) {
             clip_caption = g_intent_builder->buildIntent("", cleaned);
             if (clip_caption.empty()) {
-                // IntentBuilder filtered everything? Use the cleaned text directly
                 clip_caption = cleaned;
             }
         }
@@ -355,7 +487,6 @@ std::vector<search_result> search_images(
         if (sqlite3_open_v2(db_path.c_str(), &cand_db, SQLITE_OPEN_READONLY, nullptr) == SQLITE_OK) {
 
             if (resolved_entity_ids.size() == 1) {
-                // Single entity: SELECT file_ids directly
                 sqlite3_stmt* stmt = nullptr;
                 const char* sql = "SELECT file_id FROM entity_memberships WHERE entity_id = ?";
                 if (sqlite3_prepare_v2(cand_db, sql, -1, &stmt, nullptr) == SQLITE_OK) {
@@ -366,10 +497,9 @@ std::vector<search_result> search_images(
                     sqlite3_finalize(stmt);
                 }
             } else if (resolved_entity_ids.size() == 2) {
-                // Exactly two entities: try to use the Knowledge Graph (entity_relation_files) for an optimized inner join
                 int64_t a = std::min(resolved_entity_ids[0], resolved_entity_ids[1]);
                 int64_t b = std::max(resolved_entity_ids[0], resolved_entity_ids[1]);
-                
+
                 sqlite3_stmt* stmt = nullptr;
                 const char* sql = "SELECT file_id FROM entity_relation_files WHERE entity_a = ? AND entity_b = ?";
                 if (sqlite3_prepare_v2(cand_db, sql, -1, &stmt, nullptr) == SQLITE_OK) {
@@ -383,8 +513,6 @@ std::vector<search_result> search_images(
             }
 
             if (candidate_file_ids.empty() && resolved_entity_ids.size() >= 2) {
-                // Multiple entities (>2) OR graph intersect was empty: INTERSECT in C++
-                // Load each entity's file_id set, keep only IDs present in ALL sets
                 std::vector<std::unordered_set<int64_t>> sets;
                 for (int64_t eid : resolved_entity_ids) {
                     std::unordered_set<int64_t> fids;
@@ -401,7 +529,6 @@ std::vector<search_result> search_images(
                 }
 
                 if (!sets.empty()) {
-                    // Start with the smallest set for efficiency
                     size_t smallest_idx = 0;
                     for (size_t i = 1; i < sets.size(); ++i) {
                         if (sets[i].size() < sets[smallest_idx].size()) {
@@ -435,15 +562,12 @@ std::vector<search_result> search_images(
         has_candidates = !candidate_file_ids.empty();
         LOGI("Candidate set: %zu file_ids", candidate_file_ids.size());
 
-        // If we resolved entities but found NO intersecting files, 
-        // we should return 0 results rather than falling back to global CLIP search.
         if (!has_candidates && !resolved_entity_ids.empty()) {
             LOGI("Resolved %zu entities, but intersection is empty. Returning 0 results.", resolved_entity_ids.size());
             return results;
         }
     }
 
-    // Open DB for the final query stage
     sqlite3* db = nullptr;
     sqlite3_auto_extension((void (*)())sqlite3_vec_init);
     if (sqlite3_open_v2(db_path.c_str(), &db, SQLITE_OPEN_READONLY, nullptr) != SQLITE_OK) {
@@ -455,7 +579,6 @@ std::vector<search_result> search_images(
     if (has_candidates) {
 
         if (!clip_caption.empty()) {
-            // Get query text embedding
             std::vector<int64_t> tokens = tokenizer->encode(clip_caption);
             std::vector<float> query_embedding;
             try {
@@ -468,16 +591,12 @@ std::vector<search_result> search_images(
 
             int embed_dim = static_cast<int>(query_embedding.size());
 
-            // Fetch CLIP embeddings for candidate file_ids using rowid point lookups
             struct scored_candidate {
                 int64_t file_id;
                 float score;
             };
             std::vector<scored_candidate> scored;
 
-            // Build a batched query with placeholders for each candidate
-            // For simplicity and because sqlite-vec rowid lookups work with
-            // individual binds, we query one by one but reuse the statement.
             {
                 const char* emb_sql = "SELECT file_id, embedding FROM clip_vec WHERE rowid = ?";
                 sqlite3_stmt* emb_stmt = nullptr;
@@ -503,17 +622,15 @@ std::vector<search_result> search_images(
                 }
             }
 
-            // Sort descending by similarity, take top_k
             std::sort(scored.begin(), scored.end(),
-                [](const scored_candidate& a, const scored_candidate& b) {
-                    return a.score > b.score;
-                });
+                      [](const scored_candidate& a, const scored_candidate& b) {
+                          return a.score > b.score;
+                      });
 
             if (static_cast<int>(scored.size()) > top_k) {
                 scored.resize(top_k);
             }
 
-            // Look up file details
             const char* file_sql = "SELECT abs_path, display_name, size_bytes, mtime_unix FROM files WHERE id = ?";
             sqlite3_stmt* file_stmt = nullptr;
             if (sqlite3_prepare_v2(db, file_sql, -1, &file_stmt, nullptr) == SQLITE_OK) {
@@ -524,7 +641,7 @@ std::vector<search_result> search_images(
                     if (sqlite3_step(file_stmt) == SQLITE_ROW) {
                         search_result res;
                         res.file_id = sc.file_id;
-                        res.distance = 1.0f - sc.score; // convert similarity to distance
+                        res.distance = 1.0f - sc.score;
 
                         const char* path = reinterpret_cast<const char*>(sqlite3_column_text(file_stmt, 0));
                         res.abs_path = path ? path : "";
@@ -535,8 +652,12 @@ std::vector<search_result> search_images(
                         res.size_bytes = sqlite3_column_int64(file_stmt, 2);
                         res.mtime_unix = sqlite3_column_int64(file_stmt, 3);
 
-                        // Time-based Burst Shot Filter (NMS)
-                        // If this photo was taken within 30 seconds of an already accepted, higher-scoring photo, skip it to reduce noise.
+                        // FIX #3: Face verification — ensure all resolved entities are in this file
+                        if (!verify_entities_in_file(db, res.file_id, resolved_entity_ids)) {
+                            LOGI("Face verification failed for file_id=%ld, skipping", (long)res.file_id);
+                            continue;
+                        }
+
                         bool is_burst = false;
                         if (res.mtime_unix > 0) {
                             for (const auto& accepted : results) {
@@ -556,38 +677,31 @@ std::vector<search_result> search_images(
             }
 
         } else {
-            // No CLIP caption → sort candidates by entity_memberships score
-            LOGI("No CLIP caption, sorting by entity membership score");
+            // FIX #4: Multi-entity combined score ranking
+            LOGI("No CLIP caption, sorting by combined entity membership score");
 
-            // Get scores for the first resolved entity (primary sort key)
+            std::unordered_map<int64_t, float> combined_scores = get_combined_membership_scores(
+                db, resolved_entity_ids, candidate_file_ids);
+
             struct membership_hit {
                 int64_t file_id;
                 float score;
             };
             std::vector<membership_hit> hits;
 
-            if (!resolved_entity_ids.empty()) {
-                const char* mem_sql = "SELECT file_id, score FROM entity_memberships WHERE entity_id = ? ORDER BY score DESC LIMIT ?";
-                sqlite3_stmt* mem_stmt = nullptr;
-                if (sqlite3_prepare_v2(db, mem_sql, -1, &mem_stmt, nullptr) == SQLITE_OK) {
-                    sqlite3_bind_int64(mem_stmt, 1, resolved_entity_ids[0]);
-                    sqlite3_bind_int(mem_stmt, 2, top_k);
-                    while (sqlite3_step(mem_stmt) == SQLITE_ROW) {
-                        membership_hit h;
-                        h.file_id = sqlite3_column_int64(mem_stmt, 0);
-                        h.score = static_cast<float>(sqlite3_column_double(mem_stmt, 1));
-
-                        // Only include if in candidate set
-                        std::unordered_set<int64_t> cand_set(candidate_file_ids.begin(), candidate_file_ids.end());
-                        if (cand_set.count(h.file_id)) {
-                            hits.push_back(h);
-                        }
-                    }
-                    sqlite3_finalize(mem_stmt);
-                }
+            for (const auto& kv : combined_scores) {
+                hits.push_back({kv.first, kv.second});
             }
 
-            // Look up file details
+            std::sort(hits.begin(), hits.end(),
+                      [](const membership_hit& a, const membership_hit& b) {
+                          return a.score > b.score;
+                      });
+
+            if (static_cast<int>(hits.size()) > top_k) {
+                hits.resize(top_k);
+            }
+
             const char* file_sql = "SELECT abs_path, display_name, size_bytes, mtime_unix FROM files WHERE id = ?";
             sqlite3_stmt* file_stmt = nullptr;
             if (sqlite3_prepare_v2(db, file_sql, -1, &file_stmt, nullptr) == SQLITE_OK) {
@@ -609,7 +723,12 @@ std::vector<search_result> search_images(
                         res.size_bytes = sqlite3_column_int64(file_stmt, 2);
                         res.mtime_unix = sqlite3_column_int64(file_stmt, 3);
 
-                        // Time-based Burst Shot Filter (NMS)
+                        // FIX #3: Face verification
+                        if (!verify_entities_in_file(db, res.file_id, resolved_entity_ids)) {
+                            LOGI("Face verification failed for file_id=%ld, skipping", (long)res.file_id);
+                            continue;
+                        }
+
                         bool is_burst = false;
                         if (res.mtime_unix > 0) {
                             for (const auto& accepted : results) {
@@ -630,10 +749,9 @@ std::vector<search_result> search_images(
         }
 
     } else {
-        // ── Step 6b: No candidates → global KNN (existing path) ──
+        // ── Step 6b: No candidates → global KNN ──
         LOGI("No NER candidates, falling back to global KNN");
 
-        // Use the corrected query (or clip_caption if available) for CLIP
         std::string final_query = clip_caption.empty() ? corrected_query : clip_caption;
         if (final_query.empty()) final_query = corrected_query;
 
@@ -647,7 +765,6 @@ std::vector<search_result> search_images(
             return results;
         }
 
-        // KNN query
         struct knn_hit {
             int64_t file_id;
             float distance;
@@ -678,7 +795,6 @@ std::vector<search_result> search_images(
 
         LOGI("KNN returned %zu hits", hits.size());
 
-        // Look up file details
         {
             const char* file_sql = "SELECT abs_path, display_name, size_bytes, mtime_unix FROM files WHERE id = ?;";
             sqlite3_stmt* file_stmt = nullptr;

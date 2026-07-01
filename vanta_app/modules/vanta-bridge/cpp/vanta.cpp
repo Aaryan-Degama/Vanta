@@ -53,6 +53,31 @@ Java_expo_modules_vantaengine_IndexingService_setModelsDirNative(
     return JNI_TRUE;
 }
 
+extern "C" JNIEXPORT void JNICALL
+Java_expo_modules_vantaengine_VantaEngineModule_setCropsDirNative(
+    JNIEnv* env,
+    jobject /* this */,
+    jstring cropsDir) {
+
+    if (cropsDir == nullptr) return;
+
+    const char* crops_dir_cstr = env->GetStringUTFChars(cropsDir, nullptr);
+    VantaConfig::instance().set_crops_dir(std::string(crops_dir_cstr));
+    env->ReleaseStringUTFChars(cropsDir, crops_dir_cstr);
+
+    LOGI("Crops directory set to: %s", VantaConfig::instance().crops_dir().c_str());
+}
+
+extern "C" JNIEXPORT jboolean JNICALL
+Java_expo_modules_vantaengine_IndexingService_setCropsDirNative(
+    JNIEnv* env,
+    jobject /* this */,
+    jstring cropsDir) {
+
+    Java_expo_modules_vantaengine_VantaEngineModule_setCropsDirNative(env, nullptr, cropsDir);
+    return JNI_TRUE;
+}
+
 extern "C" JNIEXPORT jboolean JNICALL
 Java_expo_modules_vantaengine_VantaEngineModule_startStoring(
     JNIEnv* env,
@@ -603,7 +628,8 @@ Java_expo_modules_vantaengine_VantaEngineModule_getBestFaceCropNative(
         json_number_field("bbox_x", crop.bbox_x) + "," +
         json_number_field("bbox_y", crop.bbox_y) + "," +
         json_number_field("bbox_w", crop.bbox_w) + "," +
-        json_number_field("bbox_h", crop.bbox_h) +
+        json_number_field("bbox_h", crop.bbox_h) + "," +
+        json_string_field("aligned_crop_path", crop.aligned_crop_path) +
         "}";
 
     return env->NewStringUTF(json.c_str());

@@ -33,6 +33,14 @@ object VantaEngineConfig {
         return java.io.File(context.filesDir, MODELS_DIR_NAME).absolutePath
     }
 
+    fun getCropsDirectory(context: Context): String {
+        val cropsDir = java.io.File(context.filesDir, "FaceCrops")
+        if (!cropsDir.exists()) {
+            cropsDir.mkdirs()
+        }
+        return cropsDir.absolutePath
+    }
+
     /**
      * Returns the absolute path to the SQLite database file.
      *

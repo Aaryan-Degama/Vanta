@@ -77,6 +77,15 @@ const FaceCell = ({
   let imageContent;
   if (!crop || !imgSize) {
     imageContent = <View style={[styles.placeholderImage, { backgroundColor: colors.surface }]} />;
+  } else if (crop.aligned_crop_path && crop.aligned_crop_path !== '') {
+    imageContent = (
+      <View style={[styles.placeholderImage, { backgroundColor: colors.surface, overflow: 'hidden' }]}>
+        <Image
+          source={{ uri: `file://${crop.aligned_crop_path}` }}
+          style={{ width: '100%', height: '100%' }}
+        />
+      </View>
+    );
   } else {
     const scale = IMAGE_SIZE / Math.max(crop.bbox_w, crop.bbox_h);
     const translateX = -(crop.bbox_x + crop.bbox_w / 2 - imgSize.width / 2) * scale;

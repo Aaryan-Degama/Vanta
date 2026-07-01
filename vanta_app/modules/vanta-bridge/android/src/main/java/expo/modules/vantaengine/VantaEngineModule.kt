@@ -42,6 +42,11 @@ class VantaEngineModule : Module() {
     private external fun setModelsDirNative(modelsDir: String)
 
     /**
+     * One-time initialization that tells the C++ engine where crops live.
+     */
+    private external fun setCropsDirNative(cropsDir: String)
+
+    /**
      * Receives file metadata from the MediaStore scan and inserts it into SQLite.
      */
     private external fun startStoring(dbPath: String, files: Array<FileMeta>): Boolean
@@ -178,6 +183,7 @@ class VantaEngineModule : Module() {
 
             extractAssetsIfNeeded(context)
             setModelsDirNative(VantaEngineConfig.getModelsDirectory(context))
+            setCropsDirNative(VantaEngineConfig.getCropsDirectory(context))
 
             // Restore owner entity ID from SharedPreferences and propagate to C++.
             val prefs = context.getSharedPreferences("vanta_prefs", Context.MODE_PRIVATE)
@@ -303,6 +309,7 @@ class VantaEngineModule : Module() {
                     // before indexing has ever run.
                     extractAssetsIfNeeded(context)
                     setModelsDirNative(VantaEngineConfig.getModelsDirectory(context))
+                    setCropsDirNative(VantaEngineConfig.getCropsDirectory(context))
                     val result = searchImagesNative(dbPath, query)
                     promise.resolve(result)
                 } catch (e: Exception) {

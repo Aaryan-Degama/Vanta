@@ -14,6 +14,7 @@ export type FaceCrop = {
   bbox_y: number;
   bbox_w: number;
   bbox_h: number;
+  aligned_crop_path: string;
 };
 
 export type NeighborResult = {

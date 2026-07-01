@@ -158,30 +158,65 @@ FaceCrop get_best_face_crop(sqlite3* db, int64_t entity_id) {
     crop.bbox_y = 0;
     crop.bbox_w = 0;
     crop.bbox_h = 0;
+    crop.aligned_crop_path = "";
+    crop.det_score = 0.0f;
 
     sqlite3_stmt* stmt = nullptr;
-    const char* sql = "SELECT fd.file_id, f.abs_path, fd.bbox_x, fd.bbox_y, fd.bbox_w, fd.bbox_h FROM face_detections fd JOIN files f ON f.id = fd.file_id WHERE fd.entity_id = ? ORDER BY fd.det_score DESC LIMIT 1";
+    const char* sql_quality = "SELECT fd.file_id, f.abs_path, fd.bbox_x, fd.bbox_y, fd.bbox_w, fd.bbox_h, fd.aligned_crop_path, fd.det_score FROM face_detections fd JOIN files f ON f.id = fd.file_id WHERE fd.entity_id = ? AND fd.det_score > 0.65 AND fd.bbox_w > 60 AND fd.bbox_h > 60 ORDER BY fd.det_score DESC LIMIT 1";
 
-    if (sqlite3_prepare_v2(db, sql, -1, &stmt, nullptr) != SQLITE_OK) {
-        LOGE("Failed to prepare get_best_face_crop query: %s", sqlite3_errmsg(db));
-        return crop;
+    bool found = false;
+
+    if (sqlite3_prepare_v2(db, sql_quality, -1, &stmt, nullptr) == SQLITE_OK) {
+        sqlite3_bind_int64(stmt, 1, entity_id);
+        if (sqlite3_step(stmt) == SQLITE_ROW) {
+            crop.file_id = sqlite3_column_int64(stmt, 0);
+            
+            const char* path = reinterpret_cast<const char*>(sqlite3_column_text(stmt, 1));
+            crop.abs_path = path ? path : "";
+            
+            crop.bbox_x = sqlite3_column_int(stmt, 2);
+            crop.bbox_y = sqlite3_column_int(stmt, 3);
+            crop.bbox_w = sqlite3_column_int(stmt, 4);
+            crop.bbox_h = sqlite3_column_int(stmt, 5);
+            
+            const char* crop_path = reinterpret_cast<const char*>(sqlite3_column_text(stmt, 6));
+            crop.aligned_crop_path = crop_path ? crop_path : "";
+            
+            crop.det_score = static_cast<float>(sqlite3_column_double(stmt, 7));
+            found = true;
+        }
+        sqlite3_finalize(stmt);
+    } else {
+        LOGE("Failed to prepare get_best_face_crop quality query: %s", sqlite3_errmsg(db));
     }
 
-    sqlite3_bind_int64(stmt, 1, entity_id);
-
-    if (sqlite3_step(stmt) == SQLITE_ROW) {
-        crop.file_id = sqlite3_column_int64(stmt, 0);
+    if (!found) {
+        const char* sql_fallback = "SELECT fd.file_id, f.abs_path, fd.bbox_x, fd.bbox_y, fd.bbox_w, fd.bbox_h, fd.aligned_crop_path, fd.det_score FROM face_detections fd JOIN files f ON f.id = fd.file_id WHERE fd.entity_id = ? ORDER BY fd.det_score DESC LIMIT 1";
         
-        const char* path = reinterpret_cast<const char*>(sqlite3_column_text(stmt, 1));
-        crop.abs_path = path ? path : "";
-        
-        crop.bbox_x = sqlite3_column_int(stmt, 2);
-        crop.bbox_y = sqlite3_column_int(stmt, 3);
-        crop.bbox_w = sqlite3_column_int(stmt, 4);
-        crop.bbox_h = sqlite3_column_int(stmt, 5);
+        if (sqlite3_prepare_v2(db, sql_fallback, -1, &stmt, nullptr) == SQLITE_OK) {
+            sqlite3_bind_int64(stmt, 1, entity_id);
+            if (sqlite3_step(stmt) == SQLITE_ROW) {
+                crop.file_id = sqlite3_column_int64(stmt, 0);
+                
+                const char* path = reinterpret_cast<const char*>(sqlite3_column_text(stmt, 1));
+                crop.abs_path = path ? path : "";
+                
+                crop.bbox_x = sqlite3_column_int(stmt, 2);
+                crop.bbox_y = sqlite3_column_int(stmt, 3);
+                crop.bbox_w = sqlite3_column_int(stmt, 4);
+                crop.bbox_h = sqlite3_column_int(stmt, 5);
+                
+                const char* crop_path = reinterpret_cast<const char*>(sqlite3_column_text(stmt, 6));
+                crop.aligned_crop_path = crop_path ? crop_path : "";
+                
+                crop.det_score = static_cast<float>(sqlite3_column_double(stmt, 7));
+            }
+            sqlite3_finalize(stmt);
+        } else {
+            LOGE("Failed to prepare get_best_face_crop fallback query: %s", sqlite3_errmsg(db));
+        }
     }
 
-    sqlite3_finalize(stmt);
     return crop;
 }
 
