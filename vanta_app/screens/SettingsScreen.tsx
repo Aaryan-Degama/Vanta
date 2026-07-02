@@ -9,6 +9,7 @@ import {
   PermissionsAndroid,
   Platform,
   Animated,
+  Alert,
 } from 'react-native';
 import { useTheme } from '../ThemeContext';
 import { useNavigation } from '@react-navigation/native';
@@ -58,6 +59,11 @@ function LegendItem({
   );
 }
 
+/**
+ * SettingsScreen
+ * Controls application settings, dark mode preferences, and triggers the local AI indexing process.
+ * It periodically polls the native engine to fetch progress updates and database storage stats.
+ */
 export default function SettingsScreen() {
   const { isDarkMode, toggleDarkMode, colors } = useTheme();
   const navigation = useNavigation<any>();
@@ -67,11 +73,6 @@ export default function SettingsScreen() {
   const [currentFile, setCurrentFile] = useState<string>('');
   const [prevFile, setPrevFile] = useState<string>('');
   const [dbStats, setDbStats] = useState<any>({});
-  
-  const [showAdvanced, setShowAdvanced] = useState(false);
-  const [useGraph, setUseGraph] = useState(true);
-  const [useSpellCheck, setUseSpellCheck] = useState(true);
-  const [useIntent, setUseIntent] = useState(true);
 
   const fadeOutAnim = React.useRef(new Animated.Value(1)).current;
   const translateOutYAnim = React.useRef(new Animated.Value(0)).current;
@@ -183,30 +184,9 @@ export default function SettingsScreen() {
     }, 1000);
   }
 
-  // On mount: load stats once, check indexing status, and load advanced options.
+  // On mount: load stats once and check indexing status.
   React.useEffect(() => {
     fetchStats();
-    
-    const loadOptions = async () => {
-      try {
-        const ug = await AsyncStorage.getItem('use_graph');
-        const us = await AsyncStorage.getItem('use_spellcheck');
-        const ui = await AsyncStorage.getItem('use_intent');
-        
-        const graphVal = ug !== null ? JSON.parse(ug) : true;
-        const spellVal = us !== null ? JSON.parse(us) : true;
-        const intentVal = ui !== null ? JSON.parse(ui) : true;
-        
-        setUseGraph(graphVal);
-        setUseSpellCheck(spellVal);
-        setUseIntent(intentVal);
-        
-        await setSearchOptions(graphVal, spellVal, intentVal);
-      } catch(e) {
-        console.error(e);
-      }
-    };
-    loadOptions();
 
     const checkStatus = async () => {
       try {
@@ -241,6 +221,12 @@ export default function SettingsScreen() {
     };
   }, []);
 
+  /**
+   * handleStartIndexing
+   * Kicks off the media indexing and embedding generation process in the background.
+   * It requests necessary permissions on Android, initializes the SQLite vector engine,
+   * and starts a polling loop to update the UI with real-time indexing progress.
+   */
   const handleStartIndexing = async () => {
     if (isIndexing) return;
 
@@ -297,24 +283,6 @@ export default function SettingsScreen() {
       if (pollIntervalRef.current) clearInterval(pollIntervalRef.current);
     } catch (e) {
       console.error('Failed to pause', e);
-    }
-  };
-
-  const updateOption = async (key: string, value: boolean) => {
-    try {
-      await AsyncStorage.setItem(key, JSON.stringify(value));
-      
-      let finalGraph = useGraph;
-      let finalSpell = useSpellCheck;
-      let finalIntent = useIntent;
-      
-      if (key === 'use_graph') { setUseGraph(value); finalGraph = value; }
-      if (key === 'use_spellcheck') { setUseSpellCheck(value); finalSpell = value; }
-      if (key === 'use_intent') { setUseIntent(value); finalIntent = value; }
-      
-      await setSearchOptions(finalGraph, finalSpell, finalIntent);
-    } catch (e) {
-      console.error(e);
     }
   };
 
@@ -492,54 +460,24 @@ export default function SettingsScreen() {
 
       <TouchableOpacity 
         style={[styles.settingRow, { marginTop: 10 }]} 
-        onPress={() => setShowAdvanced(!showAdvanced)}
+        onPress={() => navigation.navigate('AdvancedOption')}
       >
         <Text style={[styles.settingText, { color: colors.text, fontWeight: 'bold' }]}>Advanced Options</Text>
-        <Ionicons name={showAdvanced ? "chevron-up" : "chevron-down"} size={20} color={colors.iconColor} />
+        <Ionicons name="chevron-forward" size={20} color={colors.iconColor} />
       </TouchableOpacity>
 
-      {showAdvanced && (
-        <View style={{ marginTop: 10, paddingLeft: 10 }}>
-          <View style={[styles.settingRow, { paddingVertical: 10 }]}>
-            <View style={{ flex: 1, paddingRight: 10 }}>
-              <Text style={[styles.settingText, { color: colors.text }]}>Graph Search</Text>
-              <Text style={{ color: colors.text, opacity: 0.5, fontSize: 12, marginTop: 2 }}>Extract people and validate face relationships.</Text>
-            </View>
-            <Switch
-              value={useGraph}
-              onValueChange={(val) => updateOption('use_graph', val)}
-              trackColor={{ false: '#767577', true: '#34c759' }}
-              thumbColor={'#ffffff'}
-            />
-          </View>
-          
-          <View style={[styles.settingRow, { paddingVertical: 10 }]}>
-            <View style={{ flex: 1, paddingRight: 10 }}>
-              <Text style={[styles.settingText, { color: colors.text }]}>Spell Check</Text>
-              <Text style={{ color: colors.text, opacity: 0.5, fontSize: 12, marginTop: 2 }}>Automatically correct typos in search queries.</Text>
-            </View>
-            <Switch
-              value={useSpellCheck}
-              onValueChange={(val) => updateOption('use_spellcheck', val)}
-              trackColor={{ false: '#767577', true: '#34c759' }}
-              thumbColor={'#ffffff'}
-            />
-          </View>
-
-          <View style={[styles.settingRow, { paddingVertical: 10 }]}>
-            <View style={{ flex: 1, paddingRight: 10 }}>
-              <Text style={[styles.settingText, { color: colors.text }]}>Intent Extraction</Text>
-              <Text style={{ color: colors.text, opacity: 0.5, fontSize: 12, marginTop: 2 }}>Re-format sentences into visual descriptions for CLIP.</Text>
-            </View>
-            <Switch
-              value={useIntent}
-              onValueChange={(val) => updateOption('use_intent', val)}
-              trackColor={{ false: '#767577', true: '#34c759' }}
-              thumbColor={'#ffffff'}
-            />
-          </View>
-        </View>
-      )}
+      <TouchableOpacity 
+        style={[styles.settingRow, { marginTop: 10 }]} 
+        onPress={() => {
+          Alert.alert(
+            "Feature Help",
+            "• Graph Search: Extracts people and validates face relationships to improve search accuracy.\n\n• Spell Check: Automatically corrects typos in search queries.\n\n• Intent Extraction: Re-formats natural language sentences into visual descriptions optimized for the search model."
+          );
+        }}
+      >
+        <Text style={[styles.settingText, { color: colors.text, fontWeight: 'bold' }]}>Help</Text>
+        <Ionicons name="help-circle-outline" size={20} color={colors.iconColor} />
+      </TouchableOpacity>
     </View>
   );
 }

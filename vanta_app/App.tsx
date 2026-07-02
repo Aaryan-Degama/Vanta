@@ -12,12 +12,14 @@ import SettingsScreen from './screens/SettingsScreen';
 import DebugScreen from './screens/DebugScreen';
 import { PeopleScreen } from './screens/PeopleScreen';
 import { EntityDetailScreen } from './screens/EntityDetailScreen';
+import AdvancedOptionScreen from './screens/AdvancedOptionScreen';
 import { ErrorBoundary } from './ErrorBoundary';
 
 // Type-safe route parameter list for the root navigator.
 export type RootStackParamList = {
   Search: undefined;
   Settings: undefined;
+  AdvancedOption: undefined;
   Debug: undefined;
   People: undefined;
   EntityDetail: {
@@ -42,6 +44,11 @@ function RootNavigator() {
       >
         <Stack.Screen name="Search" component={SearchScreen} />
         <Stack.Screen name="Settings" component={SettingsScreen} />
+        <Stack.Screen
+          name="AdvancedOption"
+          component={AdvancedOptionScreen}
+          options={{ headerShown: true, title: 'Advanced Options' }}
+        />
         <Stack.Screen
           name="Debug"
           component={DebugScreen}

@@ -115,6 +115,11 @@ const StaggeredResultItem = ({
   );
 };
 
+/**
+ * SearchScreen
+ * The main landing page of the application where users can input text queries to search their media.
+ * It handles the keyboard animations smoothly and displays search results in an animated, staggered grid.
+ */
 export default function SearchScreen() {
   const { colors } = useTheme();
   const navigation = useNavigation<NavigationProp<RootStackParamList>>();
@@ -159,6 +164,12 @@ export default function SearchScreen() {
   // scroll view so the UI can react to scrolling.
   const scrollY = useRef(new Animated.Value(0)).current;
 
+  /**
+   * handleSearch
+   * Asynchronously calls the native C++ engine to perform a semantic search.
+   * It sets the UI into a loading state, issues the query, and parses the JSON response
+   * to display the results in the grid. If an error occurs, it is handled via the Vanta error boundary.
+   */
   const handleSearch = async () => {
     if (!searchQuery.trim()) return;
 

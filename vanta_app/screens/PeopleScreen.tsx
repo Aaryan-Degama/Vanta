@@ -21,6 +21,12 @@ const SCREEN_WIDTH = Dimensions.get('window').width;
 const NUM_COLUMNS = 3;
 const CELL_WIDTH = SCREEN_WIDTH / NUM_COLUMNS;
 
+/**
+ * FaceCell
+ * Renders a single square cell for a person in the grid. It dynamically fetches 
+ * the best cropped face image for the given entity from the native engine and displays it.
+ * Falls back to a placeholder if the crop hasn't been generated yet.
+ */
 const FaceCell = ({
   entity,
   colors,
@@ -126,6 +132,12 @@ const FaceCell = ({
   );
 };
 
+/**
+ * PeopleScreen
+ * Displays a grid of all the recognized faces/entities in the user's library.
+ * Users can tap on a face to view more details or manually trigger a re-scan of 
+ * all faces if they suspect missing matches.
+ */
 export const PeopleScreen = () => {
   const { colors } = useTheme();
   const navigation = useNavigation<any>();

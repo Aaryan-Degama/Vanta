@@ -78,6 +78,12 @@ Java_expo_modules_vantaengine_IndexingService_setCropsDirNative(
     return JNI_TRUE;
 }
 
+/**
+ * startStoring
+ * Receives an array of FileMeta objects from Java (Android MediaStore scan results)
+ * and inserts them into the C++ SQLite database for indexing.
+ * Ensures the 'image' type is mapped to 'picture' to satisfy SQLite CHECK constraints.
+ */
 extern "C" JNIEXPORT jboolean JNICALL
 Java_expo_modules_vantaengine_VantaEngineModule_startStoring(
     JNIEnv* env,
@@ -208,6 +214,11 @@ Java_expo_modules_vantaengine_VantaEngineModule_startStoring(
     return success ? JNI_TRUE : JNI_FALSE;
 }
 
+/**
+ * getStoredFilesNative
+ * Queries the SQLite database for stored files and returns them to Java
+ * as an array of HashMaps containing uri, type, mime, and size.
+ */
 extern "C" JNIEXPORT jobjectArray JNICALL
 Java_expo_modules_vantaengine_VantaEngineModule_getStoredFilesNative(
     JNIEnv* env,
@@ -299,6 +310,12 @@ Java_expo_modules_vantaengine_IndexingService_generateEmbeddingsNative(
     return Java_expo_modules_vantaengine_VantaEngineModule_generateEmbeddingsNative(env, nullptr, dbPath);
 }
 
+/**
+ * generateEmbeddingsNative
+ * Main background worker function that iterates over unindexed images in the database.
+ * For each image, it extracts CLIP and Face embeddings using ONNX, stores them in SQLite,
+ * and clusters identical faces. It also runs a final merge pass when indexing finishes.
+ */
 extern "C" JNIEXPORT jboolean JNICALL
 Java_expo_modules_vantaengine_VantaEngineModule_generateEmbeddingsNative(
     JNIEnv* env,
@@ -452,6 +469,12 @@ Java_expo_modules_vantaengine_VantaEngineModule_getDatabaseStatsNative(
     return env->NewStringUTF(json_result.c_str());
 }
 
+/**
+ * searchImagesNative
+ * Executes a semantic search query against the SQLite vector database.
+ * Loads the CLIP tokenizer and NER models if necessary, converts the query to an embedding,
+ * and returns the top matches as a JSON array string to the React Native layer.
+ */
 extern "C" JNIEXPORT jstring JNICALL
 Java_expo_modules_vantaengine_VantaEngineModule_searchImagesNative(
     JNIEnv* env,
@@ -747,7 +770,9 @@ Java_expo_modules_vantaengine_VantaEngineModule_getEntityFilesNative(
     return env->NewStringUTF(json.c_str());
 }
 
-// ── NER pipeline: Entity metadata + Owner entity JNI ──
+// Named Entity Recognition (NER) bindings
+// These JNI functions allow the React Native layer to update entity metadata (like name, relation, age)
+// and query or set the "owner" entity for personalized searches.
 
 extern "C" JNIEXPORT jboolean JNICALL
 Java_expo_modules_vantaengine_VantaEngineModule_setEntityMetadataNative(

@@ -1,6 +1,11 @@
 import onnx
 from onnxconverter_common import float16
 
+"""
+This script takes the standard FP32 ONNX models (for image and text encoders)
+and quantizes their weights to FP16. This halves the model size on disk and can 
+improve loading times and inference performance on supported hardware.
+"""
 print("Loading clip_image.onnx.")
 image_model = onnx.load(".onnx_model/clip_image.onnx")
 

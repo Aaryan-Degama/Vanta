@@ -33,6 +33,12 @@ interface RouteProps {
   };
 }
 
+/**
+ * NeighborRow
+ * A specialized sub-component that represents a single "neighbor" or associated person
+ * who frequently appears in photos alongside the main entity. It lazily loads the
+ * neighbor's face crop image to avoid bogging down the initial render.
+ */
 const NeighborRow = ({ neighbor, colors }: { neighbor: NeighborResult; colors: any }) => {
   const [crop, setCrop] = useState<FaceCrop | null>(null);
 
@@ -77,6 +83,12 @@ const NeighborRow = ({ neighbor, colors }: { neighbor: NeighborResult; colors: a
   );
 };
 
+/**
+ * EntityDetailScreen
+ * A detailed view for a specific person/entity. It fetches their metadata (name, relation, age, location),
+ * the top photos they appear in, and other people they are frequently seen with. 
+ * Provides an interface to edit this metadata or mark the person as the "Owner" of the device.
+ */
 export const EntityDetailScreen = ({ route }: { route?: RouteProps }) => {
   const { entity } = route?.params ?? {
     entity: {
@@ -272,7 +284,8 @@ export const EntityDetailScreen = ({ route }: { route?: RouteProps }) => {
           </View>
         </View>
 
-        {/* THIS IS ME BUTTON */}
+        {/* The "Mark as Me" Button */}
+        {/* Allows the user to specify that this entity represents themselves. */}
         {!isOwner && (
           <Pressable onPress={handleSetOwner} style={[styles.thisIsMeContainer, { backgroundColor: '#ffffff', borderRadius: 30 }]}>
             <Ionicons name="star" size={20} color="#000000" style={{ marginRight: 8 }} />
@@ -280,7 +293,7 @@ export const EntityDetailScreen = ({ route }: { route?: RouteProps }) => {
           </Pressable>
         )}
 
-        {/* PHOTOS SECTION */}
+        {/* Memory Gallery Section */}
         <View style={styles.sectionHeaderRow}>
           <Text style={[styles.sectionHeader, { color: colors.text }]}>Memories</Text>
           <Text style={{ color: colors.text + '70', fontSize: 14 }}>{files.length}</Text>
@@ -304,7 +317,7 @@ export const EntityDetailScreen = ({ route }: { route?: RouteProps }) => {
           </View>
         )}
 
-        {/* PEOPLE SECTION */}
+        {/* Social Graph / Neighbors Section */}
         <Text style={[styles.sectionHeader, { color: colors.text, marginTop: 32 }]}>Often appears with</Text>
         <View style={styles.neighborsContainer}>
           {neighbors.map((neighbor) => (

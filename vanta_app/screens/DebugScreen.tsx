@@ -27,6 +27,11 @@ interface ScanResult {
   success: boolean;
 }
 
+/**
+ * DebugScreen
+ * A developer-only screen used to test the lower-level MediaStore scanning and SQLite ingestion functions.
+ * It provides a raw view of the files currently stored in the native engine's database.
+ */
 export default function DebugScreen() {
   const { colors } = useTheme();
   const [files, setFiles] = useState<FileEntry[]>([]);
