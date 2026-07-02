@@ -32,8 +32,6 @@ const FaceCell = ({
 }) => {
   const [crop, setCrop] = useState<FaceCrop | null>(null);
   const [imgSize, setImgSize] = useState<{ width: number; height: number } | null>(null);
-  const [modalVisible, setModalVisible] = useState(false);
-  const [inputValue, setInputValue] = useState('');
 
   useEffect(() => {
     let mounted = true;
@@ -73,36 +71,21 @@ const FaceCell = ({
   const navigation = useNavigation<any>();
 
   const handlePress = () => {
-    if (displayName === 'Unnamed') {
-      setInputValue('');
-      setModalVisible(true);
-    } else {
-      navigation.navigate('EntityDetail', { entity });
-    }
-  };
-
-  const handleConfirm = async () => {
-    if (inputValue.trim() === '') return;
-    try {
-      const success = await VantaEngine.setEntityName(entity.entity_id, inputValue.trim());
-      if (success) {
-        onNamed(entity.entity_id, inputValue.trim());
-        setModalVisible(false);
-      } else {
-        console.error('Failed to set entity name');
-      }
-    } catch (error) {
-      console.error('Error setting entity name', error);
-    }
-  };
-
-  const handleCancel = () => {
-    setModalVisible(false);
+    navigation.navigate('EntityDetail', { entity });
   };
 
   let imageContent;
   if (!crop || !imgSize) {
     imageContent = <View style={[styles.placeholderImage, { backgroundColor: colors.surface }]} />;
+  } else if (crop.aligned_crop_path && crop.aligned_crop_path !== '') {
+    imageContent = (
+      <View style={[styles.placeholderImage, { backgroundColor: colors.surface, overflow: 'hidden' }]}>
+        <Image
+          source={{ uri: `file://${crop.aligned_crop_path}` }}
+          style={{ width: '100%', height: '100%' }}
+        />
+      </View>
+    );
   } else {
     const scale = IMAGE_SIZE / Math.max(crop.bbox_w, crop.bbox_h);
     const translateX = -(crop.bbox_x + crop.bbox_w / 2 - imgSize.width / 2) * scale;
@@ -139,50 +122,51 @@ const FaceCell = ({
           {displayName}
         </Text>
       </Pressable>
-      <Modal visible={modalVisible} transparent={true} animationType="fade">
-        <View style={styles.modalOverlay}>
-          <View style={[styles.modalContent, { backgroundColor: colors.surface }]}>
-            <Text style={[styles.modalTitle, { color: colors.text }]}>Name this person</Text>
-            {imageContent}
-            <TextInput
-              style={[styles.input, { color: colors.text, borderColor: colors.border }]}
-              placeholder="Enter name..."
-              placeholderTextColor={colors.text + '80'}
-              value={inputValue}
-              onChangeText={setInputValue}
-              autoFocus
-            />
-            <View style={styles.modalButtons}>
-              <Button title="Cancel" color={colors.text} onPress={handleCancel} />
-              <Button title="Confirm" color={colors.primary} onPress={handleConfirm} />
-            </View>
-          </View>
-        </View>
-      </Modal>
     </>
   );
 };
 
 export const PeopleScreen = () => {
   const { colors } = useTheme();
+  const navigation = useNavigation<any>();
   const [entities, setEntities] = useState<EntityMeta[]>([]);
   const [loading, setLoading] = useState(true);
+  const [resetting, setResetting] = useState(false);
+
+  const fetchEntities = async () => {
+    try {
+      const jsonStr = await VantaEngine.getTopEntities();
+      const parsed = JSON.parse(jsonStr) as EntityMeta[];
+      setEntities(parsed);
+    } catch (error) {
+      console.error('Failed to load entities:', error);
+    }
+  };
 
   useEffect(() => {
-    const fetchEntities = async () => {
-      try {
-        const jsonStr = await VantaEngine.getTopEntities();
-        const parsed = JSON.parse(jsonStr) as EntityMeta[];
-        setEntities(parsed);
-      } catch (error) {
-        console.error('Failed to load entities:', error);
-      } finally {
-        setLoading(false);
-      }
-    };
-
-    fetchEntities();
+    fetchEntities().finally(() => setLoading(false));
   }, []);
+
+  React.useEffect(() => {
+    const unsubscribe = navigation.addListener('focus', () => {
+      fetchEntities();
+    });
+    return unsubscribe;
+  }, [navigation]);
+
+  const handleRescan = async () => {
+    setResetting(true);
+    try {
+      console.log('Starting face data reset...');
+      await VantaEngine.resetFaceData();
+      console.log('Face data reset complete. Refreshing...');
+      await fetchEntities();
+    } catch (error) {
+      console.error('Failed to reset face data:', error);
+    } finally {
+      setResetting(false);
+    }
+  };
 
   if (loading) {
     return (
@@ -192,19 +176,35 @@ export const PeopleScreen = () => {
     );
   }
 
-  const handleNameUpdate = (id: number, newName: string) => {
-    setEntities((prev) =>
-      prev.map((e) => (e.entity_id === id ? { ...e, display_name: newName } : e))
+  if (resetting) {
+    return (
+      <View style={[styles.centerContainer, { backgroundColor: colors.background }]}>
+        <ActivityIndicator size="large" color={colors.primary} />
+        <Text style={[styles.nameText, { color: colors.text, marginTop: 16 }]}>
+          Re-scanning faces...
+        </Text>
+        <Text style={[styles.nameText, { color: colors.text, opacity: 0.6, marginTop: 8 }]}>
+          This may take a few minutes
+        </Text>
+      </View>
     );
-  };
+  }
 
   const renderItem = ({ item }: { item: EntityMeta }) => {
-    return <FaceCell entity={item} colors={colors} onNamed={handleNameUpdate} />;
+    return <FaceCell entity={item} colors={colors} onNamed={() => {}} />;
   };
 
   return (
     <View style={[styles.container, { backgroundColor: colors.background }]}>
-      <Text style={[styles.title, { color: colors.text }]}>People</Text>
+      <View style={styles.headerRow}>
+        <Text style={[styles.title, { color: colors.text }]}>People</Text>
+        <Pressable
+          style={[styles.rescanButton, { backgroundColor: colors.primary }]}
+          onPress={handleRescan}
+        >
+          <Text style={styles.rescanText}>Re-scan</Text>
+        </Pressable>
+      </View>
       <FlatList
         data={entities}
         keyExtractor={(item) => item.entity_id.toString()}
@@ -230,6 +230,22 @@ const styles = StyleSheet.create({
     fontWeight: 'bold',
     marginHorizontal: 16,
     marginVertical: 16,
+  },
+  headerRow: {
+    flexDirection: 'row',
+    justifyContent: 'space-between',
+    alignItems: 'center',
+    paddingRight: 16,
+  },
+  rescanButton: {
+    paddingHorizontal: 16,
+    paddingVertical: 8,
+    borderRadius: 20,
+  },
+  rescanText: {
+    color: '#fff',
+    fontSize: 14,
+    fontWeight: '600',
   },
   listContainer: {
     paddingBottom: 20,

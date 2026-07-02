@@ -52,6 +52,21 @@ public:
         return models_dir_ + "/" + filename;
     }
 
+    void set_crops_dir(const std::string& crops_dir) {
+        std::lock_guard<std::mutex> lock(mutex_);
+        crops_dir_ = crops_dir;
+    }
+
+    std::string crops_dir() const {
+        std::lock_guard<std::mutex> lock(mutex_);
+        return crops_dir_;
+    }
+
+    std::string crop_path(const std::string& filename) const {
+        std::lock_guard<std::mutex> lock(mutex_);
+        return crops_dir_ + "/" + filename;
+    }
+
 private:
     VantaConfig() = default;
     ~VantaConfig() = default;
@@ -62,4 +77,5 @@ private:
 
     mutable std::mutex mutex_;
     std::string models_dir_;
+    std::string crops_dir_;
 };

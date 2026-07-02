@@ -401,6 +401,18 @@ std::vector<FaceResult> Face_embedding::get_faces(const cv::Mat& image) {
     return final_results;
 }
 
+cv::Mat Face_embedding::align_face(const cv::Mat& image, const FaceResult& face) {
+    cv::Mat src_pts(5, 2, CV_32FC1, (void*)face.keypoints.data());
+    cv::Mat dst_pts(5, 2, CV_32FC1, (void*)kTargetLandmarks);
+    
+    // Cropping the Image that is alignning it
+    cv::Mat transformation_matrix = cv::estimateAffinePartial2D(src_pts, dst_pts);
+    
+    cv::Mat aligned_face;
+    cv::warpAffine(image, aligned_face, transformation_matrix, cv::Size(112, 112), cv::INTER_CUBIC);
+    return aligned_face;
+}
+
 std::vector<std::vector<float>> Face_embedding::get_embedding(const cv::Mat& image, const std::vector<FaceResult>& faces) {
     /*
     Extracts 512-dimensional embeddings for each detected face using the Buffalo_sc extractor model
@@ -459,14 +471,7 @@ std::vector<std::vector<float>> Face_embedding::get_embedding(const cv::Mat& ima
 
     for (const auto& face : faces) {
 
-        cv::Mat src_pts(5, 2, CV_32FC1, (void*)face.keypoints.data());
-        cv::Mat dst_pts(5, 2, CV_32FC1, (void*)kTargetLandmarks);
-        
-        // Cropping the Image that is alignning it
-        cv::Mat transformation_matrix = cv::estimateAffinePartial2D(src_pts, dst_pts);
-        
-        cv::Mat aligned_face;
-        cv::warpAffine(image, aligned_face, transformation_matrix, cv::Size(112, 112), cv::INTER_CUBIC);
+        cv::Mat aligned_face = align_face(image, face);
 
         // Converting the RGB to BGR (OpenCV standard)
         cv::Mat rgb_face, float_face;

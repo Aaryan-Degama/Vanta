@@ -14,6 +14,7 @@ export type FaceCrop = {
   bbox_y: number;
   bbox_w: number;
   bbox_h: number;
+  aligned_crop_path: string;
 };
 
 export type NeighborResult = {
@@ -25,4 +26,14 @@ export type NeighborResult = {
 export type EntityFile = {
   file_id: number;
   abs_path: string;
+};
+
+export type EntityMetadata = {
+  entity_id: number;
+  display_name: string;
+  relation: string;
+  age: number;
+  location: string;
+  sample_count: number;
+  confidence: number;
 };

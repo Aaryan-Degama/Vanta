@@ -26,15 +26,20 @@ file(GLOB_RECURSE SEGREGATION_SOURCES CONFIGURE_DEPENDS
 # )
 set(GRAPH_SOURCES "")
 
-# Query processing sources. We intentionally exclude Intent/ and NER_BERT/
-# because the NER/BERT intent pipeline is not wired into the search path yet.
+# Query processing sources, including Intent and NER_BERT pipelines.
 file(GLOB QUERY_SOURCES CONFIGURE_DEPENDS
     "${CMAKE_CURRENT_SOURCE_DIR}/Include/Query/*.cpp"
 )
 file(GLOB_RECURSE QUERY_PROCESSING_SOURCES CONFIGURE_DEPENDS
     "${CMAKE_CURRENT_SOURCE_DIR}/Include/Query/Query_processing/*.cpp"
 )
-set(QUERY_SOURCES ${QUERY_SOURCES} ${QUERY_PROCESSING_SOURCES})
+file(GLOB_RECURSE INTENT_SOURCES CONFIGURE_DEPENDS
+    "${CMAKE_CURRENT_SOURCE_DIR}/Include/Query/Intent/*.cpp"
+)
+file(GLOB_RECURSE NER_BERT_SOURCES CONFIGURE_DEPENDS
+    "${CMAKE_CURRENT_SOURCE_DIR}/Include/Query/NER_BERT/*.cpp"
+)
+set(QUERY_SOURCES ${QUERY_SOURCES} ${QUERY_PROCESSING_SOURCES} ${INTENT_SOURCES} ${NER_BERT_SOURCES})
 
 file(GLOB_RECURSE DB_CODE CONFIGURE_DEPENDS
     "${CMAKE_CURRENT_SOURCE_DIR}/DB/*.cpp"
@@ -80,6 +85,8 @@ target_include_directories(vanta PRIVATE
     ${CMAKE_CURRENT_SOURCE_DIR}/Include
     ${CMAKE_CURRENT_SOURCE_DIR}/Include/Query
     ${CMAKE_CURRENT_SOURCE_DIR}/Include/Query/Query_processing
+    ${CMAKE_CURRENT_SOURCE_DIR}/Include/Query/Intent
+    ${CMAKE_CURRENT_SOURCE_DIR}/Include/Query/NER_BERT
     ${CMAKE_CURRENT_SOURCE_DIR}/Include/Preprocessing
     ${CMAKE_CURRENT_SOURCE_DIR}/Include/Preprocessing/Segregation
     ${CMAKE_CURRENT_SOURCE_DIR}/Include/Preprocessing/CLIP

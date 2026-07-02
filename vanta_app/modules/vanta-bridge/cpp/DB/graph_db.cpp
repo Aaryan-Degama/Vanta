@@ -3,10 +3,30 @@
 #include <android/log.h>
 #include <ctime>
 #include <algorithm>
+#include <unordered_set>
 #include "graph_db.hpp"
 
 #define LOG_TAG "VantaGraphDB"
 #define LOGE(...) __android_log_print(ANDROID_LOG_ERROR, LOG_TAG, __VA_ARGS__)
+
+// Checks whether a column exists in a table using PRAGMA table_info.
+static bool column_exists(sqlite3* db, const char* table, const char* column) {
+    std::string sql = "PRAGMA table_info(" + std::string(table) + ")";
+    sqlite3_stmt* stmt = nullptr;
+    if (sqlite3_prepare_v2(db, sql.c_str(), -1, &stmt, nullptr) != SQLITE_OK) {
+        return false;
+    }
+    bool found = false;
+    while (sqlite3_step(stmt) == SQLITE_ROW) {
+        const char* col_name = reinterpret_cast<const char*>(sqlite3_column_text(stmt, 1));
+        if (col_name && std::string(col_name) == column) {
+            found = true;
+            break;
+        }
+    }
+    sqlite3_finalize(stmt);
+    return found;
+}
 
 bool init_graph_schema(sqlite3* db) {
     char* err_msg = nullptr;
@@ -74,6 +94,30 @@ CREATE TABLE IF NOT EXISTS entity_relation_files (
         return false;
     }
 
+    // ── NER pipeline migration: add metadata columns to entities ──
+    // Idempotent: only adds columns if they don't exist yet.
+    if (!column_exists(db, "entities", "relation")) {
+        if (sqlite3_exec(db, "ALTER TABLE entities ADD COLUMN relation TEXT;",
+                         nullptr, nullptr, &err_msg) != SQLITE_OK) {
+            LOGE("Failed to add 'relation' column: %s", err_msg);
+            sqlite3_free(err_msg);
+        }
+    }
+    if (!column_exists(db, "entities", "age")) {
+        if (sqlite3_exec(db, "ALTER TABLE entities ADD COLUMN age INTEGER;",
+                         nullptr, nullptr, &err_msg) != SQLITE_OK) {
+            LOGE("Failed to add 'age' column: %s", err_msg);
+            sqlite3_free(err_msg);
+        }
+    }
+    if (!column_exists(db, "entities", "location")) {
+        if (sqlite3_exec(db, "ALTER TABLE entities ADD COLUMN location TEXT;",
+                         nullptr, nullptr, &err_msg) != SQLITE_OK) {
+            LOGE("Failed to add 'location' column: %s", err_msg);
+            sqlite3_free(err_msg);
+        }
+    }
+
     return true;
 }
 
@@ -114,30 +158,65 @@ FaceCrop get_best_face_crop(sqlite3* db, int64_t entity_id) {
     crop.bbox_y = 0;
     crop.bbox_w = 0;
     crop.bbox_h = 0;
+    crop.aligned_crop_path = "";
+    crop.det_score = 0.0f;
 
     sqlite3_stmt* stmt = nullptr;
-    const char* sql = "SELECT fd.file_id, f.abs_path, fd.bbox_x, fd.bbox_y, fd.bbox_w, fd.bbox_h FROM face_detections fd JOIN files f ON f.id = fd.file_id WHERE fd.entity_id = ? ORDER BY fd.det_score DESC LIMIT 1";
+    const char* sql_quality = "SELECT fd.file_id, f.abs_path, fd.bbox_x, fd.bbox_y, fd.bbox_w, fd.bbox_h, fd.aligned_crop_path, fd.det_score FROM face_detections fd JOIN files f ON f.id = fd.file_id WHERE fd.entity_id = ? AND fd.det_score > 0.65 AND fd.bbox_w > 60 AND fd.bbox_h > 60 ORDER BY (fd.bbox_w * fd.bbox_h) DESC LIMIT 1";
 
-    if (sqlite3_prepare_v2(db, sql, -1, &stmt, nullptr) != SQLITE_OK) {
-        LOGE("Failed to prepare get_best_face_crop query: %s", sqlite3_errmsg(db));
-        return crop;
+    bool found = false;
+
+    if (sqlite3_prepare_v2(db, sql_quality, -1, &stmt, nullptr) == SQLITE_OK) {
+        sqlite3_bind_int64(stmt, 1, entity_id);
+        if (sqlite3_step(stmt) == SQLITE_ROW) {
+            crop.file_id = sqlite3_column_int64(stmt, 0);
+            
+            const char* path = reinterpret_cast<const char*>(sqlite3_column_text(stmt, 1));
+            crop.abs_path = path ? path : "";
+            
+            crop.bbox_x = sqlite3_column_int(stmt, 2);
+            crop.bbox_y = sqlite3_column_int(stmt, 3);
+            crop.bbox_w = sqlite3_column_int(stmt, 4);
+            crop.bbox_h = sqlite3_column_int(stmt, 5);
+            
+            const char* crop_path = reinterpret_cast<const char*>(sqlite3_column_text(stmt, 6));
+            crop.aligned_crop_path = crop_path ? crop_path : "";
+            
+            crop.det_score = static_cast<float>(sqlite3_column_double(stmt, 7));
+            found = true;
+        }
+        sqlite3_finalize(stmt);
+    } else {
+        LOGE("Failed to prepare get_best_face_crop quality query: %s", sqlite3_errmsg(db));
     }
 
-    sqlite3_bind_int64(stmt, 1, entity_id);
-
-    if (sqlite3_step(stmt) == SQLITE_ROW) {
-        crop.file_id = sqlite3_column_int64(stmt, 0);
+    if (!found) {
+        const char* sql_fallback = "SELECT fd.file_id, f.abs_path, fd.bbox_x, fd.bbox_y, fd.bbox_w, fd.bbox_h, fd.aligned_crop_path, fd.det_score FROM face_detections fd JOIN files f ON f.id = fd.file_id WHERE fd.entity_id = ? ORDER BY (fd.bbox_w * fd.bbox_h) DESC LIMIT 1";
         
-        const char* path = reinterpret_cast<const char*>(sqlite3_column_text(stmt, 1));
-        crop.abs_path = path ? path : "";
-        
-        crop.bbox_x = sqlite3_column_int(stmt, 2);
-        crop.bbox_y = sqlite3_column_int(stmt, 3);
-        crop.bbox_w = sqlite3_column_int(stmt, 4);
-        crop.bbox_h = sqlite3_column_int(stmt, 5);
+        if (sqlite3_prepare_v2(db, sql_fallback, -1, &stmt, nullptr) == SQLITE_OK) {
+            sqlite3_bind_int64(stmt, 1, entity_id);
+            if (sqlite3_step(stmt) == SQLITE_ROW) {
+                crop.file_id = sqlite3_column_int64(stmt, 0);
+                
+                const char* path = reinterpret_cast<const char*>(sqlite3_column_text(stmt, 1));
+                crop.abs_path = path ? path : "";
+                
+                crop.bbox_x = sqlite3_column_int(stmt, 2);
+                crop.bbox_y = sqlite3_column_int(stmt, 3);
+                crop.bbox_w = sqlite3_column_int(stmt, 4);
+                crop.bbox_h = sqlite3_column_int(stmt, 5);
+                
+                const char* crop_path = reinterpret_cast<const char*>(sqlite3_column_text(stmt, 6));
+                crop.aligned_crop_path = crop_path ? crop_path : "";
+                
+                crop.det_score = static_cast<float>(sqlite3_column_double(stmt, 7));
+            }
+            sqlite3_finalize(stmt);
+        } else {
+            LOGE("Failed to prepare get_best_face_crop fallback query: %s", sqlite3_errmsg(db));
+        }
     }
 
-    sqlite3_finalize(stmt);
     return crop;
 }
 
@@ -317,6 +396,107 @@ std::vector<EntityFile> get_entity_files(sqlite3* db, int64_t entity_id, int lim
         results.push_back(ef);
     }
     
+    sqlite3_finalize(stmt);
+    return results;
+}
+
+// ── NER pipeline additions ──
+
+bool set_entity_metadata(sqlite3* db, int64_t entity_id,
+                         const std::string& name,
+                         const std::string& relation,
+                         int age,
+                         const std::string& location) {
+    sqlite3_stmt* stmt = nullptr;
+    const char* sql = "UPDATE entities SET display_name = ?, relation = ?, age = ?, location = ?, updated_at = ? WHERE entity_id = ?";
+
+    if (sqlite3_prepare_v2(db, sql, -1, &stmt, nullptr) != SQLITE_OK) {
+        LOGE("Failed to prepare set_entity_metadata: %s", sqlite3_errmsg(db));
+        return false;
+    }
+
+    sqlite3_bind_text(stmt, 1, name.c_str(), -1, SQLITE_TRANSIENT);
+    sqlite3_bind_text(stmt, 2, relation.c_str(), -1, SQLITE_TRANSIENT);
+    if (age > 0) {
+        sqlite3_bind_int(stmt, 3, age);
+    } else {
+        sqlite3_bind_null(stmt, 3);
+    }
+    sqlite3_bind_text(stmt, 4, location.c_str(), -1, SQLITE_TRANSIENT);
+    sqlite3_bind_int64(stmt, 5, static_cast<int64_t>(std::time(nullptr)));
+    sqlite3_bind_int64(stmt, 6, entity_id);
+
+    bool success = sqlite3_step(stmt) == SQLITE_DONE;
+    if (!success) {
+        LOGE("Failed to execute set_entity_metadata: %s", sqlite3_errmsg(db));
+    }
+
+    sqlite3_finalize(stmt);
+    return success;
+}
+
+EntityMetadata get_entity_metadata(sqlite3* db, int64_t entity_id) {
+    EntityMetadata meta;
+    meta.entity_id = entity_id;
+    meta.age = 0;
+    meta.sample_count = 0;
+    meta.confidence = 0.0f;
+
+    sqlite3_stmt* stmt = nullptr;
+    const char* sql = "SELECT display_name, relation, age, location, sample_count, confidence FROM entities WHERE entity_id = ?";
+
+    if (sqlite3_prepare_v2(db, sql, -1, &stmt, nullptr) != SQLITE_OK) {
+        LOGE("Failed to prepare get_entity_metadata: %s", sqlite3_errmsg(db));
+        return meta;
+    }
+
+    sqlite3_bind_int64(stmt, 1, entity_id);
+
+    if (sqlite3_step(stmt) == SQLITE_ROW) {
+        const char* dn = reinterpret_cast<const char*>(sqlite3_column_text(stmt, 0));
+        meta.display_name = dn ? dn : "";
+
+        const char* rel = reinterpret_cast<const char*>(sqlite3_column_text(stmt, 1));
+        meta.relation = rel ? rel : "";
+
+        meta.age = sqlite3_column_type(stmt, 2) != SQLITE_NULL ? sqlite3_column_int(stmt, 2) : 0;
+
+        const char* loc = reinterpret_cast<const char*>(sqlite3_column_text(stmt, 3));
+        meta.location = loc ? loc : "";
+
+        meta.sample_count = sqlite3_column_int(stmt, 4);
+        meta.confidence = static_cast<float>(sqlite3_column_double(stmt, 5));
+    }
+
+    sqlite3_finalize(stmt);
+    return meta;
+}
+
+std::vector<EntityCandidate> get_all_person_entities(sqlite3* db) {
+    std::vector<EntityCandidate> results;
+    sqlite3_stmt* stmt = nullptr;
+    const char* sql = "SELECT entity_id, display_name, relation, sample_count FROM entities WHERE entity_type = 'person'";
+
+    if (sqlite3_prepare_v2(db, sql, -1, &stmt, nullptr) != SQLITE_OK) {
+        LOGE("Failed to prepare get_all_person_entities: %s", sqlite3_errmsg(db));
+        return results;
+    }
+
+    while (sqlite3_step(stmt) == SQLITE_ROW) {
+        EntityCandidate c;
+        c.entity_id = sqlite3_column_int64(stmt, 0);
+
+        const char* dn = reinterpret_cast<const char*>(sqlite3_column_text(stmt, 1));
+        c.display_name = dn ? dn : "";
+
+        const char* rel = reinterpret_cast<const char*>(sqlite3_column_text(stmt, 2));
+        c.relation = rel ? rel : "";
+
+        c.sample_count = sqlite3_column_int(stmt, 3);
+
+        results.push_back(c);
+    }
+
     sqlite3_finalize(stmt);
     return results;
 }

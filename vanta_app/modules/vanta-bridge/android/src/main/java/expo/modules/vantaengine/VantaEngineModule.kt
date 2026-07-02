@@ -9,6 +9,7 @@ package expo.modules.vantaengine
 
 // Android Context and logging used throughout the module.
 import android.content.Context
+import android.content.SharedPreferences
 import android.util.Log
 
 // Permission APIs used for pre-scan logging.
@@ -39,6 +40,11 @@ class VantaEngineModule : Module() {
      * Must be called before any function that loads ONNX models or tokenizers.
      */
     private external fun setModelsDirNative(modelsDir: String)
+
+    /**
+     * One-time initialization that tells the C++ engine where crops live.
+     */
+    private external fun setCropsDirNative(cropsDir: String)
 
     /**
      * Receives file metadata from the MediaStore scan and inserts it into SQLite.
@@ -76,6 +82,11 @@ class VantaEngineModule : Module() {
     private external fun searchImagesNative(dbPath: String, query: String): String
 
     /**
+     * Sets search pipeline options in C++.
+     */
+    private external fun setSearchOptionsNative(useGraph: Boolean, useSpellCheck: Boolean, useIntent: Boolean)
+
+    /**
      * Returns the top face entities as a JSON string.
      */
     private external fun getTopEntitiesNative(dbPath: String): String
@@ -100,6 +111,30 @@ class VantaEngineModule : Module() {
      */
     private external fun getEntityFilesNative(dbPath: String, entityId: Long): String
 
+    /**
+     * Sets metadata (name, relation, age, location) on a face entity.
+     */
+    private external fun setEntityMetadataNative(
+        dbPath: String, entityId: Long,
+        name: String, relation: String,
+        age: Int, location: String
+    ): Boolean
+
+    /**
+     * Returns full metadata for a face entity as JSON.
+     */
+    private external fun getEntityMetadataNative(dbPath: String, entityId: Long): String
+
+    /**
+     * Sets the owner entity ID in the C++ layer (used for SELF span resolution).
+     */
+    private external fun setOwnerEntityIdNative(entityId: Long)
+
+    /**
+     * Resets all face data and re-runs face detection/clustering on indexed images.
+     */
+    private external fun resetFaceDataNative(dbPath: String): Boolean
+
     //endregion
 
     /**
@@ -117,8 +152,11 @@ class VantaEngineModule : Module() {
             "clip_text_fp16.onnx",
             "vocab.json",
             "merges.txt",
-            "det_500m.onnx",
-            "w600k_mbf.onnx"
+            "det_10g.onnx",
+            "w600k_r50.onnx",
+            "ner_model.onnx",
+            "ner_vocab.txt",
+            "label_map.json"
         )
 
         for (fileName in filesToCopy) {
@@ -155,6 +193,14 @@ class VantaEngineModule : Module() {
 
             extractAssetsIfNeeded(context)
             setModelsDirNative(VantaEngineConfig.getModelsDirectory(context))
+            setCropsDirNative(VantaEngineConfig.getCropsDirectory(context))
+
+            // Restore owner entity ID from SharedPreferences and propagate to C++.
+            val prefs = context.getSharedPreferences("vanta_prefs", Context.MODE_PRIVATE)
+            val ownerId = prefs.getLong("owner_entity_id", -1L)
+            if (ownerId != -1L) {
+                setOwnerEntityIdNative(ownerId)
+            }
         }
 
         // Main entry point for scanning and storing files.
@@ -273,6 +319,7 @@ class VantaEngineModule : Module() {
                     // before indexing has ever run.
                     extractAssetsIfNeeded(context)
                     setModelsDirNative(VantaEngineConfig.getModelsDirectory(context))
+                    setCropsDirNative(VantaEngineConfig.getCropsDirectory(context))
                     val result = searchImagesNative(dbPath, query)
                     promise.resolve(result)
                 } catch (e: Exception) {
@@ -329,6 +376,80 @@ class VantaEngineModule : Module() {
             if (!java.io.File(dbPath).exists()) return@AsyncFunction "[]"
 
             getEntityFilesNative(dbPath, entityId.toLong())
+        }
+
+        // ── NER pipeline: entity metadata + owner entity ──
+
+        AsyncFunction("setEntityMetadata") { entityId: Double, name: String, relation: String, age: Double, location: String ->
+            val context = appContext.reactContext
+                ?: throw IllegalStateException("Android context unavailable")
+
+            val dbPath = VantaEngineConfig.getDatabasePath(context)
+            if (!java.io.File(dbPath).exists()) return@AsyncFunction false
+
+            setEntityMetadataNative(dbPath, entityId.toLong(), name, relation, age.toInt(), location)
+        }
+
+        AsyncFunction("getEntityMetadata") { entityId: Double ->
+            val context = appContext.reactContext
+                ?: throw IllegalStateException("Android context unavailable")
+
+            val dbPath = VantaEngineConfig.getDatabasePath(context)
+            if (!java.io.File(dbPath).exists()) return@AsyncFunction "{}"
+
+            getEntityMetadataNative(dbPath, entityId.toLong())
+        }
+
+        AsyncFunction("setOwnerEntityId") { entityId: Double ->
+            val context = appContext.reactContext
+                ?: throw IllegalStateException("Android context unavailable")
+
+            val eid = entityId.toLong()
+
+            // Persist to SharedPreferences
+            val prefs = context.getSharedPreferences("vanta_prefs", Context.MODE_PRIVATE)
+            prefs.edit().putLong("owner_entity_id", eid).apply()
+
+            // Propagate to C++ global
+            setOwnerEntityIdNative(eid)
+        }
+
+        AsyncFunction("getOwnerEntityId") {
+            val context = appContext.reactContext
+                ?: throw IllegalStateException("Android context unavailable")
+
+            val prefs = context.getSharedPreferences("vanta_prefs", Context.MODE_PRIVATE)
+            prefs.getLong("owner_entity_id", -1L)
+        }
+
+        AsyncFunction("setSearchOptions") { useGraph: Boolean, useSpellCheck: Boolean, useIntent: Boolean ->
+            setSearchOptionsNative(useGraph, useSpellCheck, useIntent)
+        }
+
+        AsyncFunction("resetFaceData") { promise: Promise ->
+            val context = appContext.reactContext
+            if (context == null) {
+                promise.reject("ERR", "Android context unavailable", null)
+                return@AsyncFunction
+            }
+
+            val dbPath = VantaEngineConfig.getDatabasePath(context)
+            if (!java.io.File(dbPath).exists()) {
+                promise.resolve(false)
+                return@AsyncFunction
+            }
+
+            Thread {
+                try {
+                    extractAssetsIfNeeded(context)
+                    setModelsDirNative(VantaEngineConfig.getModelsDirectory(context))
+                    setCropsDirNative(VantaEngineConfig.getCropsDirectory(context))
+                    val result = resetFaceDataNative(dbPath)
+                    promise.resolve(result)
+                } catch (e: Exception) {
+                    promise.reject("ERR", e.message, e)
+                }
+            }.start()
         }
     }
 

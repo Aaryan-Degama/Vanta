@@ -7,6 +7,11 @@ import {
   Image,
   StyleSheet,
   ScrollView,
+  Pressable,
+  Alert,
+  Modal,
+  TextInput,
+  Button,
 } from 'react-native';
 import VantaEngine from '../modules/vanta-bridge/src/VantaEngineModule';
 import {
@@ -44,12 +49,27 @@ export const EntityDetailScreen = ({ route }: { route?: RouteProps }) => {
   const [files, setFiles] = useState<EntityFile[]>([]);
   const [neighbors, setNeighbors] = useState<NeighborResult[]>([]);
   const [loading, setLoading] = useState(true);
+  const [ownerEntityId, setOwnerEntityId] = useState<number>(-1);
+
+  // Naming Modal State
+  const [modalVisible, setModalVisible] = useState(false);
+  const [inputValue, setInputValue] = useState(entity.display_name === 'Unnamed' ? '' : entity.display_name);
+  const [relationValue, setRelationValue] = useState('');
+  const [ageValue, setAgeValue] = useState('');
+  const [locationValue, setLocationValue] = useState('');
+  const [currentName, setCurrentName] = useState(entity.display_name);
 
   useEffect(() => {
     let mounted = true;
 
     const fetchDetails = async () => {
       try {
+        // Load owner entity ID from native SharedPreferences
+        const ownerId = await VantaEngine.getOwnerEntityId();
+        if (mounted && ownerId > 0) {
+          setOwnerEntityId(ownerId);
+        }
+
         const [filesJson, neighborsJson] = await Promise.all([
           VantaEngine.getEntityFiles(entity.entity_id),
           VantaEngine.getEntityNeighbors(entity.entity_id),
@@ -75,6 +95,16 @@ export const EntityDetailScreen = ({ route }: { route?: RouteProps }) => {
     };
   }, [entity.entity_id]);
 
+  const handleSetOwner = async () => {
+    try {
+      await VantaEngine.setOwnerEntityId(entity.entity_id);
+      setOwnerEntityId(entity.entity_id);
+    } catch (error) {
+      console.error('Failed to set owner entity:', error);
+      Alert.alert('Error', 'Could not set owner entity.');
+    }
+  };
+
   if (loading) {
     return (
       <View style={[styles.centerContainer, { backgroundColor: colors.background }]}>
@@ -84,7 +114,31 @@ export const EntityDetailScreen = ({ route }: { route?: RouteProps }) => {
   }
 
   const displayName =
-    entity.display_name && entity.display_name.trim() !== '' ? entity.display_name : 'Unnamed';
+    currentName && currentName.trim() !== '' ? currentName : 'Unnamed';
+  const isOwner = ownerEntityId === entity.entity_id;
+
+  const handleConfirmName = async () => {
+    if (inputValue.trim() === '' || relationValue.trim() === '') return;
+    try {
+      const ageNum = ageValue.trim() !== '' ? parseInt(ageValue, 10) : 0;
+      const success = await VantaEngine.setEntityMetadata(
+        entity.entity_id,
+        inputValue.trim(),
+        relationValue.trim(),
+        isNaN(ageNum) ? 0 : ageNum,
+        locationValue.trim()
+      );
+      if (success) {
+        setCurrentName(inputValue.trim());
+        setModalVisible(false);
+      } else {
+        Alert.alert('Error', 'Failed to save details.');
+      }
+    } catch (error) {
+      console.error('Error setting entity metadata', error);
+      Alert.alert('Error', 'An error occurred.');
+    }
+  };
 
   const renderFileItem = ({ item }: { item: EntityFile }) => (
     <Image
@@ -96,7 +150,26 @@ export const EntityDetailScreen = ({ route }: { route?: RouteProps }) => {
 
   return (
     <ScrollView style={[styles.container, { backgroundColor: colors.background }]}>
-      <Text style={[styles.title, { color: colors.text }]}>{displayName}</Text>
+      <View style={styles.titleRow}>
+        <Text style={[styles.title, { color: colors.text }]}>{displayName}</Text>
+        <Pressable onPress={() => setModalVisible(true)} style={[styles.editButton, { backgroundColor: colors.surface }]}>
+          <Text style={{ color: colors.primary, fontWeight: 'bold' }}>Edit</Text>
+        </Pressable>
+        {isOwner && (
+          <View style={[styles.ownerBadge, { backgroundColor: colors.primary + '22' }]}>
+            <Text style={[styles.ownerBadgeText, { color: colors.primary }]}>★ You</Text>
+          </View>
+        )}
+      </View>
+
+      {!isOwner && (
+        <Pressable
+          style={[styles.thisIsMeButton, { backgroundColor: colors.primary }]}
+          onPress={handleSetOwner}
+        >
+          <Text style={styles.thisIsMeText}>This is me</Text>
+        </Pressable>
+      )}
 
       <Text style={[styles.sectionHeader, { color: colors.text }]}>Photos</Text>
       <FlatList
@@ -131,6 +204,48 @@ export const EntityDetailScreen = ({ route }: { route?: RouteProps }) => {
           <Text style={[styles.emptyText, { color: colors.text + '99' }]}>No people found</Text>
         )}
       </View>
+
+      <Modal visible={modalVisible} transparent={true} animationType="fade">
+        <View style={styles.modalOverlay}>
+          <View style={[styles.modalContent, { backgroundColor: colors.surface }]}>
+            <Text style={[styles.modalTitle, { color: colors.text }]}>Name this person</Text>
+            <TextInput
+              style={[styles.input, { color: colors.text, borderColor: colors.border }]}
+              placeholder="Name (required)"
+              placeholderTextColor={colors.text + '80'}
+              value={inputValue}
+              onChangeText={setInputValue}
+              autoFocus
+            />
+            <TextInput
+              style={[styles.input, { color: colors.text, borderColor: colors.border }]}
+              placeholder="Relation (e.g. father, friend, sister)"
+              placeholderTextColor={colors.text + '80'}
+              value={relationValue}
+              onChangeText={setRelationValue}
+            />
+            <TextInput
+              style={[styles.input, { color: colors.text, borderColor: colors.border }]}
+              placeholder="Age (optional)"
+              placeholderTextColor={colors.text + '80'}
+              value={ageValue}
+              onChangeText={setAgeValue}
+              keyboardType="numeric"
+            />
+            <TextInput
+              style={[styles.input, { color: colors.text, borderColor: colors.border }]}
+              placeholder="Location (optional)"
+              placeholderTextColor={colors.text + '80'}
+              value={locationValue}
+              onChangeText={setLocationValue}
+            />
+            <View style={styles.modalButtons}>
+              <Button title="Cancel" color={colors.text} onPress={() => setModalVisible(false)} />
+              <Button title="Confirm" color={colors.primary} onPress={handleConfirmName} />
+            </View>
+          </View>
+        </View>
+      </Modal>
     </ScrollView>
   );
 };
@@ -144,11 +259,43 @@ const styles = StyleSheet.create({
     justifyContent: 'center',
     alignItems: 'center',
   },
+  titleRow: {
+    flexDirection: 'row',
+    alignItems: 'center',
+    marginHorizontal: 16,
+    marginVertical: 16,
+    gap: 10,
+  },
   title: {
     fontSize: 34,
     fontWeight: 'bold',
+  },
+  editButton: {
+    paddingHorizontal: 12,
+    paddingVertical: 6,
+    borderRadius: 16,
+    marginLeft: 'auto',
+  },
+  ownerBadge: {
+    paddingHorizontal: 10,
+    paddingVertical: 4,
+    borderRadius: 12,
+  },
+  ownerBadgeText: {
+    fontSize: 14,
+    fontWeight: '600',
+  },
+  thisIsMeButton: {
     marginHorizontal: 16,
-    marginVertical: 16,
+    marginBottom: 8,
+    paddingVertical: 10,
+    borderRadius: 8,
+    alignItems: 'center',
+  },
+  thisIsMeText: {
+    color: '#FFFFFF',
+    fontSize: 16,
+    fontWeight: '600',
   },
   sectionHeader: {
     fontSize: 22,
@@ -189,4 +336,36 @@ const styles = StyleSheet.create({
     fontStyle: 'italic',
     marginTop: 8,
   },
+  modalOverlay: {
+    flex: 1,
+    backgroundColor: 'rgba(0,0,0,0.5)',
+    justifyContent: 'center',
+    alignItems: 'center',
+  },
+  modalContent: {
+    width: 300,
+    padding: 20,
+    borderRadius: 12,
+    alignItems: 'center',
+  },
+  modalTitle: {
+    fontSize: 18,
+    fontWeight: 'bold',
+    marginBottom: 16,
+  },
+  input: {
+    width: '100%',
+    height: 44,
+    borderWidth: 1,
+    borderRadius: 8,
+    paddingHorizontal: 12,
+    marginTop: 16,
+    marginBottom: 20,
+  },
+  modalButtons: {
+    flexDirection: 'row',
+    justifyContent: 'space-between',
+    width: '100%',
+  },
 });
+

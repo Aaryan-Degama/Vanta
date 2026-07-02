@@ -37,6 +37,9 @@ declare class VantaEngineModule extends NativeModule<Record<string, never>> {
   // Searches indexed images with a natural-language query.
   searchImages(query: string): Promise<string>;
 
+  // Sets global search options (Graph Search, Spell Check, Intent Extraction).
+  setSearchOptions(useGraph: boolean, useSpellCheck: boolean, useIntent: boolean): Promise<void>;
+
   // Face-clustering API: returns the top entities as a JSON string.
   getTopEntities(): Promise<string>;
 
@@ -51,6 +54,27 @@ declare class VantaEngineModule extends NativeModule<Record<string, never>> {
 
   // Returns files associated with the entity as a JSON string.
   getEntityFiles(entityId: number): Promise<string>;
+
+  // Sets metadata (name, relation, age, location) on a face entity.
+  setEntityMetadata(
+    entityId: number,
+    name: string,
+    relation: string,
+    age: number,
+    location: string
+  ): Promise<boolean>;
+
+  // Returns full metadata for a face entity as a JSON string.
+  getEntityMetadata(entityId: number): Promise<string>;
+
+  // Sets the owner entity ID (the user's own face).
+  setOwnerEntityId(entityId: number): Promise<void>;
+
+  // Returns the current owner entity ID (-1 if not set).
+  getOwnerEntityId(): Promise<number>;
+
+  // Resets all face data and re-runs face pipeline with updated thresholds.
+  resetFaceData(): Promise<boolean>;
 }
 
 // `requireNativeModule` resolves the platform-specific implementation at runtime.

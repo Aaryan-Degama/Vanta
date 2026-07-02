@@ -61,3 +61,11 @@ modules/vanta-bridge/android/.cxx/tools/debug/armeabi-v7a/compile_commands.json
 modules/vanta-bridge/android/.cxx/tools/debug/x86/compile_commands.json
 modules/vanta-bridge/android/.cxx/tools/debug/x86_64/compile_commands.json
 
+
+
+
+*.pt
+*.pth
+*.safetensors
+checkpoint/
+runs/

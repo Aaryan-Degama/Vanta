@@ -14,8 +14,11 @@
 #include "CLIP_model.hpp"
 #include "CLIP_tokenizer.hpp"
 #include "face_DB.hpp"
+#include "ner.hpp"
 
 static CLIPTokenizer* g_tokenizer = nullptr;
+static vanta::ner::NERModel* g_ner_model = nullptr;
+static int64_t g_owner_entity_id = -1;
 
 // Guards all global model/session state so indexing and search cannot race
 // while creating or loading sessions.
@@ -47,6 +50,31 @@ Java_expo_modules_vantaengine_IndexingService_setModelsDirNative(
     jstring modelsDir) {
 
     Java_expo_modules_vantaengine_VantaEngineModule_setModelsDirNative(env, nullptr, modelsDir);
+    return JNI_TRUE;
+}
+
+extern "C" JNIEXPORT void JNICALL
+Java_expo_modules_vantaengine_VantaEngineModule_setCropsDirNative(
+    JNIEnv* env,
+    jobject /* this */,
+    jstring cropsDir) {
+
+    if (cropsDir == nullptr) return;
+
+    const char* crops_dir_cstr = env->GetStringUTFChars(cropsDir, nullptr);
+    VantaConfig::instance().set_crops_dir(std::string(crops_dir_cstr));
+    env->ReleaseStringUTFChars(cropsDir, crops_dir_cstr);
+
+    LOGI("Crops directory set to: %s", VantaConfig::instance().crops_dir().c_str());
+}
+
+extern "C" JNIEXPORT jboolean JNICALL
+Java_expo_modules_vantaengine_IndexingService_setCropsDirNative(
+    JNIEnv* env,
+    jobject /* this */,
+    jstring cropsDir) {
+
+    Java_expo_modules_vantaengine_VantaEngineModule_setCropsDirNative(env, nullptr, cropsDir);
     return JNI_TRUE;
 }
 
@@ -193,7 +221,7 @@ Java_expo_modules_vantaengine_VantaEngineModule_getStoredFilesNative(
     env->ReleaseStringUTFChars(dbPath, db_path_cstr);
 
     // Query files from C++ SQLite
-    std::vector<file_meta> files = get_files(db_path, 100);
+    std::vector<file_meta> files = get_files(db_path, 100 );
 
     // Build a Java HashMap for each row and return as Object[]
     jclass hashMapClass = env->FindClass("java/util/HashMap");
@@ -350,6 +378,7 @@ Java_expo_modules_vantaengine_VantaEngineModule_generateEmbeddingsNative(
                     // Also run face pipeline
                     if (run_face_pipeline(db, path, img_meta.id, *g_face_session)) {
                         cluster_faces_for_file(db, img_meta.id);
+                        update_graph_for_file(db, img_meta.id);
                     } else {
                         LOGE("Failed to run face pipeline for %s", path.c_str());
                     }
@@ -373,7 +402,9 @@ Java_expo_modules_vantaengine_VantaEngineModule_generateEmbeddingsNative(
         g_index_status = "finished";
         LOGI("Finished generating embeddings for all images. Running second pass reclustering...");
         recluster_pending_faces(db);
-        LOGI("Second pass reclustering finished.");
+        LOGI("Second pass reclustering finished. Running entity merge pass...");
+        merge_similar_entities(db);
+        LOGI("Entity merge pass finished.");
     }
 
     sqlite3_close(db);
@@ -471,7 +502,37 @@ Java_expo_modules_vantaengine_VantaEngineModule_searchImagesNative(
         LOGI("CLIP tokenizer loaded successfully.");
     }
 
-    std::vector<search_result> results = search_images(db_path, query, g_clip_session, g_tokenizer);
+    // Lazy-init NER model (mutex-protected, same pattern as CLIP)
+    {
+        std::lock_guard<std::mutex> lock(g_session_mutex);
+
+        if (!g_ner_model) {
+            g_ner_model = new vanta::ner::NERModel();
+        }
+
+        if (!g_ner_model->is_loaded()) {
+            const VantaConfig& cfg = VantaConfig::instance();
+            std::string ner_model_path = cfg.model_path("ner_model.onnx");
+            std::string ner_vocab_path = cfg.model_path("ner_vocab.txt");
+            std::string ner_label_path = cfg.model_path("label_map.json");
+            if (!g_ner_model->load(ner_model_path, ner_vocab_path, ner_label_path)) {
+                LOGE("Failed to load NER model (non-fatal, search will skip NER)");
+                // Non-fatal: search falls back to global KNN
+            }
+        }
+    }
+
+    vanta::ner::NERModel* ner_ptr = nullptr;
+    {
+        std::lock_guard<std::mutex> lock(g_session_mutex);
+        if (g_ner_model && g_ner_model->is_loaded()) {
+            ner_ptr = g_ner_model;
+        }
+    }
+
+    std::vector<search_result> results = search_images(
+        db_path, query, g_clip_session, g_tokenizer,
+        ner_ptr, g_owner_entity_id);
 
     LOGI("Building JSON response for %zu results", results.size());
 
@@ -569,7 +630,8 @@ Java_expo_modules_vantaengine_VantaEngineModule_getBestFaceCropNative(
         json_number_field("bbox_x", crop.bbox_x) + "," +
         json_number_field("bbox_y", crop.bbox_y) + "," +
         json_number_field("bbox_w", crop.bbox_w) + "," +
-        json_number_field("bbox_h", crop.bbox_h) +
+        json_number_field("bbox_h", crop.bbox_h) + "," +
+        json_string_field("aligned_crop_path", crop.aligned_crop_path) +
         "}";
 
     return env->NewStringUTF(json.c_str());
@@ -601,6 +663,9 @@ Java_expo_modules_vantaengine_VantaEngineModule_setEntityNameNative(
     }
 
     bool success = set_entity_name(db, static_cast<int64_t>(entityId), entity_name);
+    if (success) {
+        rebuild_query_engine_dictionary(db_path);
+    }
 
     sqlite3_close(db);
 
@@ -680,4 +745,211 @@ Java_expo_modules_vantaengine_VantaEngineModule_getEntityFilesNative(
     json += "]";
 
     return env->NewStringUTF(json.c_str());
+}
+
+// ── NER pipeline: Entity metadata + Owner entity JNI ──
+
+extern "C" JNIEXPORT jboolean JNICALL
+Java_expo_modules_vantaengine_VantaEngineModule_setEntityMetadataNative(
+    JNIEnv* env,
+    jobject /* this */,
+    jstring dbPath,
+    jlong entityId,
+    jstring name,
+    jstring relation,
+    jint age,
+    jstring location) {
+
+    if (dbPath == nullptr || name == nullptr) return JNI_FALSE;
+
+    const char* db_path_cstr = env->GetStringUTFChars(dbPath, nullptr);
+    std::string db_path(db_path_cstr);
+    env->ReleaseStringUTFChars(dbPath, db_path_cstr);
+
+    const char* name_cstr = env->GetStringUTFChars(name, nullptr);
+    std::string entity_name(name_cstr);
+    env->ReleaseStringUTFChars(name, name_cstr);
+
+    std::string entity_relation;
+    if (relation != nullptr) {
+        const char* rel_cstr = env->GetStringUTFChars(relation, nullptr);
+        entity_relation = rel_cstr;
+        env->ReleaseStringUTFChars(relation, rel_cstr);
+    }
+
+    std::string entity_location;
+    if (location != nullptr) {
+        const char* loc_cstr = env->GetStringUTFChars(location, nullptr);
+        entity_location = loc_cstr;
+        env->ReleaseStringUTFChars(location, loc_cstr);
+    }
+
+    sqlite3* db = nullptr;
+    if (sqlite3_open_v2(db_path.c_str(), &db, SQLITE_OPEN_READWRITE, nullptr) != SQLITE_OK) {
+        LOGE("Failed to open DB for setEntityMetadataNative: %s", sqlite3_errmsg(db));
+        if (db) sqlite3_close(db);
+        return JNI_FALSE;
+    }
+
+    bool success = set_entity_metadata(db, static_cast<int64_t>(entityId),
+                                       entity_name, entity_relation,
+                                       static_cast<int>(age), entity_location);
+    if (success) {
+        rebuild_query_engine_dictionary(db_path);
+    }
+
+    sqlite3_close(db);
+    return success ? JNI_TRUE : JNI_FALSE;
+}
+
+extern "C" JNIEXPORT jstring JNICALL
+Java_expo_modules_vantaengine_VantaEngineModule_getEntityMetadataNative(
+    JNIEnv* env,
+    jobject /* this */,
+    jstring dbPath,
+    jlong entityId) {
+
+    if (dbPath == nullptr) return env->NewStringUTF("{}");
+
+    const char* db_path_cstr = env->GetStringUTFChars(dbPath, nullptr);
+    std::string db_path(db_path_cstr);
+    env->ReleaseStringUTFChars(dbPath, db_path_cstr);
+
+    sqlite3* db = nullptr;
+    if (sqlite3_open_v2(db_path.c_str(), &db, SQLITE_OPEN_READONLY, nullptr) != SQLITE_OK) {
+        LOGE("Failed to open DB for getEntityMetadataNative: %s", sqlite3_errmsg(db));
+        if (db) sqlite3_close(db);
+        return env->NewStringUTF("{}");
+    }
+
+    EntityMetadata meta = get_entity_metadata(db, static_cast<int64_t>(entityId));
+
+    sqlite3_close(db);
+
+    std::string json = "{" +
+        json_number_field("entity_id", meta.entity_id) + "," +
+        json_string_field("display_name", meta.display_name) + "," +
+        json_string_field("relation", meta.relation) + "," +
+        json_number_field("age", meta.age) + "," +
+        json_string_field("location", meta.location) + "," +
+        json_number_field("sample_count", meta.sample_count) + "," +
+        json_number_field("confidence", meta.confidence) +
+        "}";
+
+    return env->NewStringUTF(json.c_str());
+}
+
+extern "C" JNIEXPORT void JNICALL
+Java_expo_modules_vantaengine_VantaEngineModule_setOwnerEntityIdNative(
+    JNIEnv* env,
+    jobject /* this */,
+    jlong entityId) {
+
+    g_owner_entity_id = static_cast<int64_t>(entityId);
+    LOGI("Owner entity ID set to: %ld", (long)g_owner_entity_id);
+}
+
+extern "C" JNIEXPORT void JNICALL
+Java_expo_modules_vantaengine_VantaEngineModule_setSearchOptionsNative(
+    JNIEnv* env,
+    jobject /* this */,
+    jboolean useGraph,
+    jboolean useSpellCheck,
+    jboolean useIntent) {
+    
+    set_query_options(useGraph, useSpellCheck, useIntent);
+}
+
+extern "C" JNIEXPORT jboolean JNICALL
+Java_expo_modules_vantaengine_VantaEngineModule_resetFaceDataNative(
+    JNIEnv* env,
+    jobject /* this */,
+    jstring dbPath) {
+
+    if (dbPath == nullptr) return JNI_FALSE;
+
+    const char* db_path_cstr = env->GetStringUTFChars(dbPath, nullptr);
+    std::string db_path(db_path_cstr);
+    env->ReleaseStringUTFChars(dbPath, db_path_cstr);
+
+    // Ensure sqlite-vec is registered
+    sqlite3_auto_extension((void (*)())sqlite3_vec_init);
+
+    sqlite3* db = initialize_database(db_path);
+    if (!db) {
+        LOGE("Failed to open DB for resetFaceData");
+        return JNI_FALSE;
+    }
+
+    if (!init_face_schema(db)) {
+        LOGE("Failed to init face schema for reset");
+        sqlite3_close(db);
+        return JNI_FALSE;
+    }
+
+    // Wipe all face data
+    if (!reset_face_data(db)) {
+        LOGE("Failed to reset face data");
+        sqlite3_close(db);
+        return JNI_FALSE;
+    }
+
+    // Delete crop files from disk
+    std::string crops_dir = VantaConfig::instance().crops_dir();
+    if (!crops_dir.empty()) {
+        std::string cmd = "rm -rf " + crops_dir + "/*";
+        system(cmd.c_str());
+        LOGI("Cleared crop files from: %s", crops_dir.c_str());
+    }
+
+    // Re-run face pipeline on all indexed picture files (skip CLIP)
+    LOGI("Re-running face pipeline on all indexed images...");
+
+    {
+        std::lock_guard<std::mutex> lock(g_session_mutex);
+        if (!g_face_session) {
+            g_face_session = new Face_embedding();
+        }
+        if (!g_face_session->is_loaded()) {
+            if (!g_face_session->load()) {
+                LOGE("Failed to load Face model for re-indexing");
+                sqlite3_close(db);
+                return JNI_FALSE;
+            }
+        }
+    }
+
+    // Query all indexed picture files
+    const char* sql = "SELECT id, abs_path FROM files WHERE filetype = 'picture' AND status = 'indexed'";
+    sqlite3_stmt* stmt = nullptr;
+    if (sqlite3_prepare_v2(db, sql, -1, &stmt, nullptr) != SQLITE_OK) {
+        LOGE("Failed to query indexed files for face re-processing: %s", sqlite3_errmsg(db));
+        sqlite3_close(db);
+        return JNI_FALSE;
+    }
+
+    int processed = 0;
+    while (sqlite3_step(stmt) == SQLITE_ROW) {
+        int64_t file_id = sqlite3_column_int64(stmt, 0);
+        const char* path = reinterpret_cast<const char*>(sqlite3_column_text(stmt, 1));
+        if (!path) continue;
+
+        std::string abs_path(path);
+        if (run_face_pipeline(db, abs_path, file_id, *g_face_session)) {
+            cluster_faces_for_file(db, file_id);
+            processed++;
+        }
+
+        if (processed % 100 == 0 && processed > 0) {
+            LOGI("Face re-processing progress: %d files", processed);
+        }
+    }
+    sqlite3_finalize(stmt);
+
+    LOGI("Face re-processing complete: %d files processed. Running recluster...", processed);
+    recluster_pending_faces(db);
+    LOGI("Face data reset and re-indexed successfully.");
+
+    sqlite3_close(db);
+    return JNI_TRUE;
 }

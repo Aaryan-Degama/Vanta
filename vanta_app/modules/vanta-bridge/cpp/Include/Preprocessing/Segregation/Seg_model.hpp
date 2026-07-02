@@ -66,5 +66,7 @@ public:
 
     cv::Mat load_img_seg(const std::string& PATH);
     std::vector<FaceResult> get_faces(const cv::Mat& image);
+    cv::Mat align_face(const cv::Mat& image, const FaceResult& face);
+    cv::Mat align_face(const cv::Mat& image, const FaceResult& face, int output_size);
     std::vector<std::vector<float>> get_embedding(const cv::Mat& image, const std::vector<FaceResult>& faces);
 };

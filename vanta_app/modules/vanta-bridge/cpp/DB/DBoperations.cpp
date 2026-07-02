@@ -42,14 +42,14 @@ CREATE INDEX IF NOT EXISTS idx_files_status     ON files(status);
 CREATE INDEX IF NOT EXISTS idx_files_face_count ON files(face_count);
 )";
 
+    sqlite3_auto_extension((void (*)())sqlite3_vec_init);
+
     if (sqlite3_open(db_path.c_str(), &db) != SQLITE_OK)
     {
         LOGE("Failed to open DB: %s", sqlite3_errmsg(db));
         sqlite3_close(db);
         return nullptr;
     }
-
-    sqlite3_auto_extension((void (*)())sqlite3_vec_init);
 
     char* err_msg = nullptr;
     if (sqlite3_exec(db, "PRAGMA foreign_keys = ON; PRAGMA journal_mode = WAL;", nullptr, nullptr, &err_msg) != SQLITE_OK)
