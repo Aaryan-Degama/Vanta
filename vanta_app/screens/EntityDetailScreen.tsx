@@ -11,15 +11,21 @@ import {
   Alert,
   Modal,
   TextInput,
-  Button,
+  Dimensions,
 } from 'react-native';
 import VantaEngine from '../modules/vanta-bridge/src/VantaEngineModule';
 import {
   EntityMeta,
   EntityFile,
   NeighborResult,
+  FaceCrop,
 } from '../modules/vanta-bridge/src/VantaEngine.types';
 import { useTheme } from '../ThemeContext';
+import { LinearGradient } from 'expo-linear-gradient';
+import { BlurView } from 'expo-blur';
+import { Ionicons } from '@expo/vector-icons';
+
+const { width } = Dimensions.get('window');
 
 interface RouteProps {
   params: {
@@ -27,14 +33,50 @@ interface RouteProps {
   };
 }
 
-/**
- * Screen that shows all photos for a face entity and the people who often
- * appear alongside them.
- *
- * The entity is normally passed via React Navigation route params. A fallback
- * mock entity is provided so the screen can be rendered in isolation (e.g. in
- * Jest smoke tests) without crashing.
- */
+const NeighborRow = ({ neighbor, colors }: { neighbor: NeighborResult; colors: any }) => {
+  const [crop, setCrop] = useState<FaceCrop | null>(null);
+
+  useEffect(() => {
+    let mounted = true;
+    const fetchCrop = async () => {
+      try {
+        const cropJson = await VantaEngine.getBestFaceCrop(neighbor.neighbor_id);
+        if (cropJson && cropJson !== '{}') {
+          const parsedCrop = JSON.parse(cropJson) as FaceCrop;
+          if (parsedCrop.file_id !== -1 && mounted) {
+            setCrop(parsedCrop);
+          }
+        }
+      } catch (error) {
+        // Ignore fetch errors for neighbors
+      }
+    };
+    fetchCrop();
+    return () => { mounted = false; };
+  }, [neighbor.neighbor_id]);
+
+  const neighborName = neighbor.display_name && neighbor.display_name.trim() !== '' ? neighbor.display_name : 'Unnamed';
+
+  return (
+    <View style={[styles.neighborRow, { backgroundColor: colors.surface }]}>
+      <View style={[styles.neighborIcon, { backgroundColor: colors.primary + '20', overflow: 'hidden' }]}>
+        {crop && crop.aligned_crop_path ? (
+          <Image source={{ uri: `file://${crop.aligned_crop_path}` }} style={{ width: '100%', height: '100%' }} />
+        ) : (
+          <Ionicons name="person" size={20} color={colors.primary} />
+        )}
+      </View>
+      <View style={{ flex: 1 }}>
+        <Text style={[styles.neighborName, { color: colors.text }]}>{neighborName}</Text>
+        <Text style={[styles.neighborCount, { color: colors.text + '80' }]}>
+          {neighbor.co_occurrence_count} shared memories
+        </Text>
+      </View>
+      <Ionicons name="chevron-forward" size={20} color={colors.text + '40'} />
+    </View>
+  );
+};
+
 export const EntityDetailScreen = ({ route }: { route?: RouteProps }) => {
   const { entity } = route?.params ?? {
     entity: {
@@ -44,13 +86,19 @@ export const EntityDetailScreen = ({ route }: { route?: RouteProps }) => {
       confidence: 0,
     } as EntityMeta,
   };
-  const { colors } = useTheme();
+  const { colors, isDarkMode } = useTheme();
 
   const [files, setFiles] = useState<EntityFile[]>([]);
   const [neighbors, setNeighbors] = useState<NeighborResult[]>([]);
   const [loading, setLoading] = useState(true);
   const [ownerEntityId, setOwnerEntityId] = useState<number>(-1);
+  const [bestCrop, setBestCrop] = useState<FaceCrop | null>(null);
 
+  // Metadata
+  const [relation, setRelation] = useState('');
+  const [age, setAge] = useState<number>(0);
+  const [location, setLocation] = useState('');
+  
   // Naming Modal State
   const [modalVisible, setModalVisible] = useState(false);
   const [inputValue, setInputValue] = useState(entity.display_name === 'Unnamed' ? '' : entity.display_name);
@@ -64,24 +112,36 @@ export const EntityDetailScreen = ({ route }: { route?: RouteProps }) => {
 
     const fetchDetails = async () => {
       try {
-        // Load owner entity ID from native SharedPreferences
         const ownerId = await VantaEngine.getOwnerEntityId();
-        if (mounted && ownerId > 0) {
-          setOwnerEntityId(ownerId);
-        }
+        if (mounted && ownerId > 0) setOwnerEntityId(ownerId);
 
-        const [filesJson, neighborsJson] = await Promise.all([
+        const [filesJson, neighborsJson, cropJson, metaJson] = await Promise.all([
           VantaEngine.getEntityFiles(entity.entity_id),
           VantaEngine.getEntityNeighbors(entity.entity_id),
+          VantaEngine.getBestFaceCrop(entity.entity_id),
+          VantaEngine.getEntityMetadata(entity.entity_id)
         ]);
 
         if (!mounted) return;
 
-        const parsedFiles = JSON.parse(filesJson) as EntityFile[];
-        const parsedNeighbors = JSON.parse(neighborsJson) as NeighborResult[];
+        setFiles(JSON.parse(filesJson) as EntityFile[]);
+        setNeighbors(JSON.parse(neighborsJson) as NeighborResult[]);
+        
+        if (cropJson && cropJson !== '{}') {
+          const parsedCrop = JSON.parse(cropJson) as FaceCrop;
+          if (parsedCrop.file_id !== -1) setBestCrop(parsedCrop);
+        }
 
-        setFiles(parsedFiles);
-        setNeighbors(parsedNeighbors);
+        if (metaJson && metaJson !== '{}') {
+          const meta = JSON.parse(metaJson);
+          if (meta.relation) setRelation(meta.relation);
+          if (meta.age) setAge(meta.age);
+          if (meta.location) setLocation(meta.location);
+          setRelationValue(meta.relation || '');
+          setAgeValue(meta.age ? meta.age.toString() : '');
+          setLocationValue(meta.location || '');
+        }
+
       } catch (error) {
         console.error('Failed to load entity details:', error);
       } finally {
@@ -90,35 +150,21 @@ export const EntityDetailScreen = ({ route }: { route?: RouteProps }) => {
     };
 
     fetchDetails();
-    return () => {
-      mounted = false;
-    };
+    return () => { mounted = false; };
   }, [entity.entity_id]);
 
   const handleSetOwner = async () => {
     try {
       await VantaEngine.setOwnerEntityId(entity.entity_id);
       setOwnerEntityId(entity.entity_id);
+      Alert.alert('Success', 'This person is now set as the device owner.');
     } catch (error) {
-      console.error('Failed to set owner entity:', error);
-      Alert.alert('Error', 'Could not set owner entity.');
+      Alert.alert('Error', 'Failed to set owner.');
     }
   };
 
-  if (loading) {
-    return (
-      <View style={[styles.centerContainer, { backgroundColor: colors.background }]}>
-        <ActivityIndicator size="large" color={colors.primary} />
-      </View>
-    );
-  }
-
-  const displayName =
-    currentName && currentName.trim() !== '' ? currentName : 'Unnamed';
-  const isOwner = ownerEntityId === entity.entity_id;
-
   const handleConfirmName = async () => {
-    if (inputValue.trim() === '' || relationValue.trim() === '') return;
+    if (inputValue.trim() === '') return;
     try {
       const ageNum = ageValue.trim() !== '' ? parseInt(ageValue, 10) : 0;
       const success = await VantaEngine.setEntityMetadata(
@@ -130,6 +176,9 @@ export const EntityDetailScreen = ({ route }: { route?: RouteProps }) => {
       );
       if (success) {
         setCurrentName(inputValue.trim());
+        setRelation(relationValue.trim());
+        setAge(isNaN(ageNum) ? 0 : ageNum);
+        setLocation(locationValue.trim());
         setModalVisible(false);
       } else {
         Alert.alert('Error', 'Failed to save details.');
@@ -141,112 +190,197 @@ export const EntityDetailScreen = ({ route }: { route?: RouteProps }) => {
   };
 
   const renderFileItem = ({ item }: { item: EntityFile }) => (
-    <Image
-      source={{ uri: `file://${item.abs_path}` }}
-      style={styles.photoItem}
-      resizeMode="cover"
-    />
+    <View style={styles.photoContainer}>
+      <Image
+        source={{ uri: `file://${item.abs_path}` }}
+        style={styles.photoItem}
+        resizeMode="cover"
+      />
+    </View>
   );
 
+  const displayName = currentName && currentName.trim() !== '' ? currentName : 'Unnamed';
+  const isOwner = ownerEntityId === entity.entity_id;
+
+  const headerImageUrl = bestCrop && bestCrop.aligned_crop_path 
+    ? `file://${bestCrop.aligned_crop_path}` 
+    : files.length > 0 ? `file://${files[0].abs_path}` : null;
+
   return (
-    <ScrollView style={[styles.container, { backgroundColor: colors.background }]}>
-      <View style={styles.titleRow}>
-        <Text style={[styles.title, { color: colors.text }]}>{displayName}</Text>
-        <Pressable onPress={() => setModalVisible(true)} style={[styles.editButton, { backgroundColor: colors.surface }]}>
-          <Text style={{ color: colors.primary, fontWeight: 'bold' }}>Edit</Text>
-        </Pressable>
-        {isOwner && (
-          <View style={[styles.ownerBadge, { backgroundColor: colors.primary + '22' }]}>
-            <Text style={[styles.ownerBadgeText, { color: colors.primary }]}>★ You</Text>
-          </View>
-        )}
-      </View>
+    <View style={[styles.container, { backgroundColor: colors.background }]}>
+      <ScrollView bounces={false} contentContainerStyle={{ paddingBottom: 40 }} showsVerticalScrollIndicator={false}>
+        
+        {/* HERO SECTION */}
+        <View style={styles.heroContainer}>
+          {headerImageUrl && (
+            <Image source={{ uri: headerImageUrl }} style={StyleSheet.absoluteFillObject} blurRadius={40} />
+          )}
+          <View style={[StyleSheet.absoluteFillObject, { backgroundColor: isDarkMode ? 'rgba(0,0,0,0.6)' : 'rgba(255,255,255,0.4)' }]} />
+          
+          <LinearGradient
+            colors={['transparent', colors.background]}
+            style={StyleSheet.absoluteFillObject}
+            locations={[0.5, 1]}
+          />
 
-      {!isOwner && (
-        <Pressable
-          style={[styles.thisIsMeButton, { backgroundColor: colors.primary }]}
-          onPress={handleSetOwner}
-        >
-          <Text style={styles.thisIsMeText}>This is me</Text>
-        </Pressable>
-      )}
-
-      <Text style={[styles.sectionHeader, { color: colors.text }]}>Photos</Text>
-      <FlatList
-        horizontal
-        data={files}
-        keyExtractor={(item) => item.file_id.toString()}
-        renderItem={renderFileItem}
-        contentContainerStyle={styles.horizontalList}
-        showsHorizontalScrollIndicator={false}
-      />
-
-      <Text style={[styles.sectionHeader, { color: colors.text }]}>People</Text>
-      <View style={styles.neighborsContainer}>
-        {neighbors.map((neighbor) => {
-          const neighborName =
-            neighbor.display_name && neighbor.display_name.trim() !== ''
-              ? neighbor.display_name
-              : 'Unnamed';
-          return (
-            <View
-              key={neighbor.neighbor_id}
-              style={[styles.neighborRow, { borderBottomColor: colors.border }]}
-            >
-              <Text style={[styles.neighborName, { color: colors.text }]}>{neighborName}</Text>
-              <Text style={[styles.neighborCount, { color: colors.text + '99' }]}>
-                {neighbor.co_occurrence_count} photos together
-              </Text>
+          <View style={styles.heroContent}>
+            <View style={styles.avatarWrapper}>
+              {headerImageUrl ? (
+                <Image source={{ uri: headerImageUrl }} style={styles.avatarImage} />
+              ) : (
+                <View style={[styles.avatarImage, { backgroundColor: colors.surface, justifyContent: 'center', alignItems: 'center' }]}>
+                  <Ionicons name="person" size={50} color={colors.text + '50'} />
+                </View>
+              )}
             </View>
-          );
-        })}
-        {neighbors.length === 0 && (
-          <Text style={[styles.emptyText, { color: colors.text + '99' }]}>No people found</Text>
-        )}
-      </View>
 
-      <Modal visible={modalVisible} transparent={true} animationType="fade">
-        <View style={styles.modalOverlay}>
-          <View style={[styles.modalContent, { backgroundColor: colors.surface }]}>
-            <Text style={[styles.modalTitle, { color: colors.text }]}>Name this person</Text>
-            <TextInput
-              style={[styles.input, { color: colors.text, borderColor: colors.border }]}
-              placeholder="Name (required)"
-              placeholderTextColor={colors.text + '80'}
-              value={inputValue}
-              onChangeText={setInputValue}
-              autoFocus
-            />
-            <TextInput
-              style={[styles.input, { color: colors.text, borderColor: colors.border }]}
-              placeholder="Relation (e.g. father, friend, sister)"
-              placeholderTextColor={colors.text + '80'}
-              value={relationValue}
-              onChangeText={setRelationValue}
-            />
-            <TextInput
-              style={[styles.input, { color: colors.text, borderColor: colors.border }]}
-              placeholder="Age (optional)"
-              placeholderTextColor={colors.text + '80'}
-              value={ageValue}
-              onChangeText={setAgeValue}
-              keyboardType="numeric"
-            />
-            <TextInput
-              style={[styles.input, { color: colors.text, borderColor: colors.border }]}
-              placeholder="Location (optional)"
-              placeholderTextColor={colors.text + '80'}
-              value={locationValue}
-              onChangeText={setLocationValue}
-            />
-            <View style={styles.modalButtons}>
-              <Button title="Cancel" color={colors.text} onPress={() => setModalVisible(false)} />
-              <Button title="Confirm" color={colors.primary} onPress={handleConfirmName} />
-            </View>
+            <BlurView intensity={isDarkMode ? 40 : 80} tint={isDarkMode ? 'dark' : 'light'} style={styles.glassCard}>
+              <View style={styles.glassCardHeader}>
+                <Text style={[styles.title, { color: colors.text }]} numberOfLines={1}>{displayName}</Text>
+                <Pressable onPress={() => setModalVisible(true)} style={[styles.editButton, { backgroundColor: '#ffffff' }]}>
+                  <Ionicons name="pencil" size={16} color="#000000" />
+                </Pressable>
+              </View>
+
+              <View style={styles.badgesRow}>
+                {isOwner && (
+                  <View style={[styles.badge, { backgroundColor: '#ffcc0030', borderColor: '#ffcc0050', borderWidth: 1 }]}>
+                    <Ionicons name="star" size={14} color="#ffcc00" />
+                    <Text style={[styles.badgeText, { color: '#ffcc00' }]}> You</Text>
+                  </View>
+                )}
+                {relation !== '' && (
+                  <View style={[styles.badge, { backgroundColor: colors.text + '10' }]}>
+                    <Ionicons name="people" size={14} color={colors.text + '80'} />
+                    <Text style={[styles.badgeText, { color: colors.text }]}> {relation}</Text>
+                  </View>
+                )}
+                {age > 0 && (
+                  <View style={[styles.badge, { backgroundColor: colors.text + '10' }]}>
+                    <Ionicons name="calendar" size={14} color={colors.text + '80'} />
+                    <Text style={[styles.badgeText, { color: colors.text }]}> {age} yrs</Text>
+                  </View>
+                )}
+                {location !== '' && (
+                  <View style={[styles.badge, { backgroundColor: colors.text + '10' }]}>
+                    <Ionicons name="location" size={14} color={colors.text + '80'} />
+                    <Text style={[styles.badgeText, { color: colors.text }]}> {location}</Text>
+                  </View>
+                )}
+              </View>
+            </BlurView>
           </View>
         </View>
-      </Modal>
-    </ScrollView>
+
+        {/* THIS IS ME BUTTON */}
+        {!isOwner && (
+          <Pressable onPress={handleSetOwner} style={[styles.thisIsMeContainer, { backgroundColor: '#ffffff', borderRadius: 30 }]}>
+            <Ionicons name="star" size={20} color="#000000" style={{ marginRight: 8 }} />
+            <Text style={[styles.thisIsMeText, { color: '#000000', fontWeight: 'bold' }]}>Mark as "Me"</Text>
+          </Pressable>
+        )}
+
+        {/* PHOTOS SECTION */}
+        <View style={styles.sectionHeaderRow}>
+          <Text style={[styles.sectionHeader, { color: colors.text }]}>Memories</Text>
+          <Text style={{ color: colors.text + '70', fontSize: 14 }}>{files.length}</Text>
+        </View>
+        
+        {files.length > 0 ? (
+          <FlatList
+            horizontal
+            data={files}
+            keyExtractor={(item) => item.file_id.toString()}
+            renderItem={renderFileItem}
+            contentContainerStyle={styles.horizontalList}
+            showsHorizontalScrollIndicator={false}
+            snapToInterval={220 + 16}
+            decelerationRate="fast"
+          />
+        ) : (
+          <View style={[styles.emptyBox, { backgroundColor: colors.surface }]}>
+            <Ionicons name="image-outline" size={32} color={colors.text + '40'} />
+            <Text style={{ color: colors.text + '60', marginTop: 8 }}>No memories found.</Text>
+          </View>
+        )}
+
+        {/* PEOPLE SECTION */}
+        <Text style={[styles.sectionHeader, { color: colors.text, marginTop: 32 }]}>Often appears with</Text>
+        <View style={styles.neighborsContainer}>
+          {neighbors.map((neighbor) => (
+            <NeighborRow key={neighbor.neighbor_id} neighbor={neighbor} colors={colors} />
+          ))}
+          {neighbors.length === 0 && (
+            <View style={[styles.emptyBox, { backgroundColor: colors.surface }]}>
+              <Ionicons name="people-outline" size={32} color={colors.text + '40'} />
+              <Text style={{ color: colors.text + '60', marginTop: 8 }}>No network found.</Text>
+            </View>
+          )}
+        </View>
+
+        {/* EDIT MODAL */}
+        <Modal visible={modalVisible} transparent={true} animationType="slide">
+          <View style={styles.modalOverlay}>
+            <View style={[styles.modalContent, { backgroundColor: colors.background }]}>
+              <View style={styles.modalDragHandle} />
+              <Text style={[styles.modalTitle, { color: colors.text }]}>Edit Details</Text>
+              
+              <Text style={[styles.inputLabel, { color: colors.text + '90' }]}>Display Name</Text>
+              <TextInput
+                style={[styles.input, { color: colors.text, backgroundColor: colors.text + '10' }]}
+                placeholder="Required"
+                placeholderTextColor={colors.text + '50'}
+                value={inputValue}
+                onChangeText={setInputValue}
+                autoFocus
+              />
+
+              <Text style={[styles.inputLabel, { color: colors.text + '90' }]}>Relation</Text>
+              <TextInput
+                style={[styles.input, { color: colors.text, backgroundColor: colors.text + '10' }]}
+                placeholder="e.g. father, friend, sister"
+                placeholderTextColor={colors.text + '50'}
+                value={relationValue}
+                onChangeText={setRelationValue}
+              />
+
+              <View style={{ flexDirection: 'row', gap: 12 }}>
+                <View style={{ flex: 1 }}>
+                  <Text style={[styles.inputLabel, { color: colors.text + '90' }]}>Age</Text>
+                  <TextInput
+                    style={[styles.input, { color: colors.text, backgroundColor: colors.text + '10' }]}
+                    placeholder="Optional"
+                    placeholderTextColor={colors.text + '50'}
+                    value={ageValue}
+                    onChangeText={setAgeValue}
+                    keyboardType="numeric"
+                  />
+                </View>
+                <View style={{ flex: 2 }}>
+                  <Text style={[styles.inputLabel, { color: colors.text + '90' }]}>Location</Text>
+                  <TextInput
+                    style={[styles.input, { color: colors.text, backgroundColor: colors.text + '10' }]}
+                    placeholder="Optional"
+                    placeholderTextColor={colors.text + '50'}
+                    value={locationValue}
+                    onChangeText={setLocationValue}
+                  />
+                </View>
+              </View>
+
+              <View style={styles.modalButtons}>
+                <Pressable style={styles.modalButtonCancel} onPress={() => setModalVisible(false)}>
+                  <Text style={{ color: colors.text, fontWeight: '600' }}>Cancel</Text>
+                </Pressable>
+                <Pressable style={[styles.modalButtonConfirm, { backgroundColor: '#ffffff', borderRadius: 30 }]} onPress={handleConfirmName}>
+                  <Text style={{ color: '#000000', fontWeight: 'bold' }}>Save Changes</Text>
+                </Pressable>
+              </View>
+            </View>
+          </View>
+        </Modal>
+      </ScrollView>
+    </View>
   );
 };
 
@@ -254,118 +388,230 @@ const styles = StyleSheet.create({
   container: {
     flex: 1,
   },
-  centerContainer: {
-    flex: 1,
-    justifyContent: 'center',
+  heroContainer: {
+    height: 380,
+    width: '100%',
+    justifyContent: 'flex-end',
+  },
+  heroContent: {
     alignItems: 'center',
+    paddingHorizontal: 20,
+    paddingBottom: 20,
   },
-  titleRow: {
-    flexDirection: 'row',
-    alignItems: 'center',
-    marginHorizontal: 16,
-    marginVertical: 16,
-    gap: 10,
+  avatarWrapper: {
+    width: 130,
+    height: 130,
+    borderRadius: 65,
+    backgroundColor: '#fff',
+    padding: 4,
+    shadowColor: '#000',
+    shadowOffset: { width: 0, height: 10 },
+    shadowOpacity: 0.3,
+    shadowRadius: 15,
+    elevation: 10,
+    marginBottom: 20,
+    zIndex: 10,
   },
-  title: {
-    fontSize: 34,
-    fontWeight: 'bold',
+  avatarImage: {
+    width: '100%',
+    height: '100%',
+    borderRadius: 65,
   },
-  editButton: {
-    paddingHorizontal: 12,
-    paddingVertical: 6,
-    borderRadius: 16,
-    marginLeft: 'auto',
+  glassCard: {
+    width: '100%',
+    borderRadius: 24,
+    padding: 20,
+    overflow: 'hidden',
+    borderWidth: 1,
+    borderColor: 'rgba(255,255,255,0.1)',
   },
-  ownerBadge: {
-    paddingHorizontal: 10,
-    paddingVertical: 4,
-    borderRadius: 12,
-  },
-  ownerBadgeText: {
-    fontSize: 14,
-    fontWeight: '600',
-  },
-  thisIsMeButton: {
-    marginHorizontal: 16,
-    marginBottom: 8,
-    paddingVertical: 10,
-    borderRadius: 8,
-    alignItems: 'center',
-  },
-  thisIsMeText: {
-    color: '#FFFFFF',
-    fontSize: 16,
-    fontWeight: '600',
-  },
-  sectionHeader: {
-    fontSize: 22,
-    fontWeight: '600',
-    marginHorizontal: 16,
-    marginTop: 24,
-    marginBottom: 12,
-  },
-  horizontalList: {
-    paddingHorizontal: 16,
-  },
-  photoItem: {
-    width: 120,
-    height: 120,
-    borderRadius: 8,
-    marginRight: 12,
-  },
-  neighborsContainer: {
-    paddingHorizontal: 16,
-    paddingBottom: 40,
-  },
-  neighborRow: {
+  glassCardHeader: {
     flexDirection: 'row',
     justifyContent: 'space-between',
     alignItems: 'center',
-    paddingVertical: 12,
-    borderBottomWidth: StyleSheet.hairlineWidth,
+    marginBottom: 12,
   },
-  neighborName: {
-    fontSize: 16,
-    fontWeight: '500',
-  },
-  neighborCount: {
-    fontSize: 14,
-  },
-  emptyText: {
-    fontSize: 14,
-    fontStyle: 'italic',
-    marginTop: 8,
-  },
-  modalOverlay: {
+  title: {
+    fontSize: 28,
+    fontWeight: '800',
     flex: 1,
-    backgroundColor: 'rgba(0,0,0,0.5)',
+    letterSpacing: -0.5,
+  },
+  editButton: {
+    width: 36,
+    height: 36,
+    borderRadius: 18,
     justifyContent: 'center',
     alignItems: 'center',
   },
-  modalContent: {
-    width: 300,
-    padding: 20,
-    borderRadius: 12,
-    alignItems: 'center',
+  badgesRow: {
+    flexDirection: 'row',
+    flexWrap: 'wrap',
+    gap: 8,
   },
-  modalTitle: {
-    fontSize: 18,
-    fontWeight: 'bold',
+  badge: {
+    flexDirection: 'row',
+    alignItems: 'center',
+    paddingHorizontal: 10,
+    paddingVertical: 6,
+    borderRadius: 12,
+  },
+  badgeText: {
+    fontSize: 13,
+    fontWeight: '600',
+  },
+  thisIsMeContainer: {
+    marginHorizontal: 20,
+    marginTop: 12,
+    flexDirection: 'row',
+    alignItems: 'center',
+    justifyContent: 'center',
+    paddingVertical: 14,
+    borderRadius: 8,
+  },
+  thisIsMeText: {
+    fontSize: 16,
+    fontWeight: '500',
+  },
+  sectionHeaderRow: {
+    flexDirection: 'row',
+    justifyContent: 'space-between',
+    alignItems: 'baseline',
+    marginHorizontal: 20,
+    marginTop: 32,
     marginBottom: 16,
   },
-  input: {
+  sectionHeader: {
+    fontSize: 22,
+    fontWeight: '700',
+    letterSpacing: -0.5,
+    marginHorizontal: 20,
+    marginBottom: 16,
+  },
+  horizontalList: {
+    paddingHorizontal: 20,
+    paddingBottom: 20,
+  },
+  photoContainer: {
+    width: 220,
+    height: 300,
+    marginRight: 16,
+    shadowColor: '#000',
+    shadowOffset: { width: 0, height: 8 },
+    shadowOpacity: 0.15,
+    shadowRadius: 12,
+    elevation: 6,
+    borderRadius: 24,
+    backgroundColor: '#fff',
+  },
+  photoItem: {
     width: '100%',
+    height: '100%',
+    borderRadius: 24,
+  },
+  neighborsContainer: {
+    paddingHorizontal: 20,
+    gap: 12,
+  },
+  neighborRow: {
+    flexDirection: 'row',
+    alignItems: 'center',
+    padding: 16,
+    borderRadius: 20,
+    shadowColor: '#000',
+    shadowOffset: { width: 0, height: 4 },
+    shadowOpacity: 0.05,
+    shadowRadius: 8,
+    elevation: 2,
+  },
+  neighborIcon: {
+    width: 44,
     height: 44,
-    borderWidth: 1,
-    borderRadius: 8,
-    paddingHorizontal: 12,
-    marginTop: 16,
+    borderRadius: 22,
+    justifyContent: 'center',
+    alignItems: 'center',
+    marginRight: 16,
+  },
+  neighborName: {
+    fontSize: 17,
+    fontWeight: '700',
+    marginBottom: 4,
+  },
+  neighborCount: {
+    fontSize: 13,
+  },
+  emptyBox: {
+    padding: 30,
+    borderRadius: 20,
+    alignItems: 'center',
+    justifyContent: 'center',
+    marginHorizontal: 20,
+  },
+  modalOverlay: {
+    flex: 1,
+    justifyContent: 'flex-end',
+    backgroundColor: 'rgba(0,0,0,0.4)',
+  },
+  modalContent: {
+    borderTopLeftRadius: 32,
+    borderTopRightRadius: 32,
+    padding: 24,
+    paddingBottom: 40,
+    minHeight: 400,
+  },
+  modalDragHandle: {
+    width: 40,
+    height: 5,
+    backgroundColor: '#888',
+    borderRadius: 3,
+    alignSelf: 'center',
+    marginBottom: 20,
+    opacity: 0.5,
+  },
+  modalTitle: {
+    fontSize: 24,
+    fontWeight: '800',
+    marginBottom: 24,
+    letterSpacing: -0.5,
+  },
+  inputLabel: {
+    fontSize: 13,
+    fontWeight: '600',
+    marginBottom: 8,
+    marginLeft: 4,
+    textTransform: 'uppercase',
+    letterSpacing: 0.5,
+  },
+  input: {
+    height: 52,
+    borderRadius: 14,
+    paddingHorizontal: 16,
+    fontSize: 16,
     marginBottom: 20,
   },
   modalButtons: {
     flexDirection: 'row',
-    justifyContent: 'space-between',
-    width: '100%',
+    gap: 12,
+    marginTop: 10,
+  },
+  modalButtonCancel: {
+    flex: 1,
+    height: 56,
+    borderRadius: 16,
+    justifyContent: 'center',
+    alignItems: 'center',
+    backgroundColor: 'rgba(150,150,150,0.1)',
+  },
+  modalButtonConfirm: {
+    flex: 2,
+    height: 56,
+    borderRadius: 16,
+    justifyContent: 'center',
+    alignItems: 'center',
+    shadowColor: '#000',
+    shadowOffset: { width: 0, height: 4 },
+    shadowOpacity: 0.2,
+    shadowRadius: 8,
+    elevation: 4,
   },
 });
-

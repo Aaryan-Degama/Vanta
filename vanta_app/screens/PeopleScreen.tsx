@@ -199,10 +199,10 @@ export const PeopleScreen = () => {
       <View style={styles.headerRow}>
         <Text style={[styles.title, { color: colors.text }]}>People</Text>
         <Pressable
-          style={[styles.rescanButton, { backgroundColor: colors.primary }]}
+          style={[styles.rescanButton, { backgroundColor: '#ffffff', borderRadius: 30 }]}
           onPress={handleRescan}
         >
-          <Text style={styles.rescanText}>Re-scan</Text>
+          <Text style={[styles.rescanText, { color: '#000000', fontWeight: 'bold' }]}>Re-scan</Text>
         </Pressable>
       </View>
       <FlatList

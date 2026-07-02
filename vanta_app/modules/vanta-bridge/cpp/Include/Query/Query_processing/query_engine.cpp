@@ -220,6 +220,12 @@ static float dot_product(const float* a, const float* b, int dim) {
     return sum;
 }
 
+static const std::unordered_set<std::string> QUERY_FILLERS = {
+    "show", "me", "pictures", "picture", "photos", "photo", "of", "and", "in", "at",
+    "on", "the", "a", "an", "please", "find", "my", "some", "i", "want", "to", "see",
+    "with", "images", "image", "give", "looking", "for", "pics", "pic"
+};
+
 // ── NEW: Fallback entity extraction from raw query words ──
 static void fallback_entity_resolution(
     const std::string& query,
@@ -239,19 +245,13 @@ static void fallback_entity_resolution(
 
     if (candidates.empty()) return;
 
-    static const std::unordered_set<std::string> fillers = {
-        "show", "me", "pictures", "picture", "photos", "photo", "of", "and", "in", "at",
-        "on", "the", "a", "an", "please", "find", "my", "some", "i", "want", "to", "see",
-        "with", "images", "image", "give", "looking", "for", "pics", "pic"
-    };
-
     std::istringstream iss(query);
     std::string word;
     while (iss >> word) {
         std::string lw = to_lower(word);
         lw = strip_possessive(lw);
         
-        if (fillers.count(lw)) continue;
+        if (QUERY_FILLERS.count(lw)) continue;
         if (lw.size() < 3) continue; // Skip short words
 
         // Try to resolve this word as an entity name or relation
@@ -271,8 +271,8 @@ static void fallback_entity_resolution(
     }
 }
 
-// ── NEW: Verify that all required entities have face detections in the file ──
-static bool verify_entities_in_file(sqlite3* db, int64_t file_id, const std::vector<int64_t>& entity_ids) {
+// ── NEW: Verify that required entities have face detections in the file ──
+static bool verify_entities_in_file(sqlite3* db, int64_t file_id, const std::vector<int64_t>& entity_ids, bool require_all = true) {
     if (entity_ids.empty()) return true;
     
     std::string sql = "SELECT DISTINCT entity_id FROM face_detections WHERE file_id = ? AND entity_id IN (";
@@ -294,14 +294,15 @@ static bool verify_entities_in_file(sqlite3* db, int64_t file_id, const std::vec
     }
     sqlite3_finalize(stmt);
     
-    return found.size() == entity_ids.size();
+    return require_all ? (found.size() == entity_ids.size()) : (found.size() > 0);
 }
 
 // ── NEW: Get combined membership score for multi-entity ranking ──
 static std::unordered_map<int64_t, float> get_combined_membership_scores(
     sqlite3* db,
     const std::vector<int64_t>& entity_ids,
-    const std::vector<int64_t>& candidate_file_ids) {
+    const std::vector<int64_t>& candidate_file_ids,
+    bool require_all) {
     
     std::unordered_map<int64_t, float> scores;
     if (entity_ids.empty() || candidate_file_ids.empty()) return scores;
@@ -334,7 +335,7 @@ static std::unordered_map<int64_t, float> get_combined_membership_scores(
     sqlite3_finalize(stmt);
     
     for (const auto& kv : file_scores) {
-        if (kv.second.size() == entity_ids.size()) {
+        if (!require_all || kv.second.size() == entity_ids.size()) {
             float min_score = kv.second[0];
             for (float s : kv.second) {
                 if (s < min_score) min_score = s;
@@ -496,6 +497,20 @@ std::vector<search_result> search_images(
             } else {
                 clip_caption = cleaned;
             }
+
+            bool only_fillers = true;
+            std::istringstream ciss(clip_caption);
+            std::string cw;
+            while (ciss >> cw) {
+                if (QUERY_FILLERS.find(to_lower(cw)) == QUERY_FILLERS.end()) {
+                    only_fillers = false;
+                    break;
+                }
+            }
+            if (only_fillers) {
+                clip_caption = "";
+                LOGI("CLIP caption contained only filler words, clearing it");
+            }
         }
 
         LOGI("CLIP caption: '%s'", clip_caption.c_str());
@@ -504,6 +519,7 @@ std::vector<search_result> search_images(
     // ── Step 5: Build candidate file_id set ──
     std::vector<int64_t> candidate_file_ids;
     bool has_candidates = false;
+    bool require_all_entities = true;
 
     if (!resolved_entity_ids.empty()) {
         sqlite3* cand_db = nullptr;
@@ -575,7 +591,17 @@ std::vector<search_result> search_images(
                     }
 
                     if (candidate_file_ids.empty()) {
-                        LOGI("Intersect empty. Returning 0 results instead of falling back to UNION.");
+                        LOGI("Intersect empty. Falling back to UNION to provide some results.");
+                        require_all_entities = false;
+                        std::unordered_set<int64_t> union_set;
+                        for (const auto& s : sets) {
+                            for (int64_t fid : s) {
+                                union_set.insert(fid);
+                            }
+                        }
+                        for (int64_t fid : union_set) {
+                            candidate_file_ids.push_back(fid);
+                        }
                     }
                 }
             }
@@ -677,7 +703,7 @@ std::vector<search_result> search_images(
                         res.mtime_unix = sqlite3_column_int64(file_stmt, 3);
 
                         // FIX #3: Face verification — ensure all resolved entities are in this file
-                        if (!verify_entities_in_file(db, res.file_id, resolved_entity_ids)) {
+                        if (!verify_entities_in_file(db, res.file_id, resolved_entity_ids, require_all_entities)) {
                             LOGI("Face verification failed for file_id=%ld, skipping", (long)res.file_id);
                             continue;
                         }
@@ -705,7 +731,7 @@ std::vector<search_result> search_images(
             LOGI("No CLIP caption, sorting by combined entity membership score");
 
             std::unordered_map<int64_t, float> combined_scores = get_combined_membership_scores(
-                db, resolved_entity_ids, candidate_file_ids);
+                db, resolved_entity_ids, candidate_file_ids, require_all_entities);
 
             struct membership_hit {
                 int64_t file_id;
@@ -748,7 +774,7 @@ std::vector<search_result> search_images(
                         res.mtime_unix = sqlite3_column_int64(file_stmt, 3);
 
                         // FIX #3: Face verification
-                        if (!verify_entities_in_file(db, res.file_id, resolved_entity_ids)) {
+                        if (!verify_entities_in_file(db, res.file_id, resolved_entity_ids, require_all_entities)) {
                             LOGI("Face verification failed for file_id=%ld, skipping", (long)res.file_id);
                             continue;
                         }

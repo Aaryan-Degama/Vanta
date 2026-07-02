@@ -20,8 +20,23 @@ urllib.request.urlretrieve(url_w600k, temp_w600k)
 print("Downloading det_10g.onnx (FP32)...")
 urllib.request.urlretrieve(url_det10g, temp_det10g)
 
-print("Renaming downloaded models...")
-os.rename(temp_w600k, final_w600k)
-os.rename(temp_det10g, final_det10g)
+print("Quantizing w600k_r50 to INT8...")
+import onnxruntime.quantization as q
+q.quantize_dynamic(
+    temp_w600k,
+    final_w600k,
+    weight_type=q.QuantType.QUInt8
+)
 
-print("Done! FP32 Models are ready. Please rebuild the app.")
+print("Quantizing det_10g to INT8...")
+q.quantize_dynamic(
+    temp_det10g,
+    final_det10g,
+    weight_type=q.QuantType.QUInt8
+)
+
+print("Cleaning up FP32 models...")
+os.remove(temp_w600k)
+os.remove(temp_det10g)
+
+print("Done! INT8 Models are ready in", dest_dir)
