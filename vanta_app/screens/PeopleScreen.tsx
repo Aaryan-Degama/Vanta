@@ -131,43 +131,61 @@ export const PeopleScreen = () => {
   const navigation = useNavigation<any>();
   const [entities, setEntities] = useState<EntityMeta[]>([]);
   const [loading, setLoading] = useState(true);
+  const [resetting, setResetting] = useState(false);
+
+  const fetchEntities = async () => {
+    try {
+      const jsonStr = await VantaEngine.getTopEntities();
+      const parsed = JSON.parse(jsonStr) as EntityMeta[];
+      setEntities(parsed);
+    } catch (error) {
+      console.error('Failed to load entities:', error);
+    }
+  };
 
   useEffect(() => {
-    const fetchEntities = async () => {
-      try {
-        const jsonStr = await VantaEngine.getTopEntities();
-        const parsed = JSON.parse(jsonStr) as EntityMeta[];
-        setEntities(parsed);
-      } catch (error) {
-        console.error('Failed to load entities:', error);
-      } finally {
-        setLoading(false);
-      }
-    };
-
-    fetchEntities();
+    fetchEntities().finally(() => setLoading(false));
   }, []);
 
   React.useEffect(() => {
     const unsubscribe = navigation.addListener('focus', () => {
-      const fetchEntities = async () => {
-        try {
-          const jsonStr = await VantaEngine.getTopEntities();
-          const parsed = JSON.parse(jsonStr) as EntityMeta[];
-          setEntities(parsed);
-        } catch (error) {
-          console.error('Failed to load entities:', error);
-        }
-      };
       fetchEntities();
     });
     return unsubscribe;
   }, [navigation]);
 
+  const handleRescan = async () => {
+    setResetting(true);
+    try {
+      console.log('Starting face data reset...');
+      await VantaEngine.resetFaceData();
+      console.log('Face data reset complete. Refreshing...');
+      await fetchEntities();
+    } catch (error) {
+      console.error('Failed to reset face data:', error);
+    } finally {
+      setResetting(false);
+    }
+  };
+
   if (loading) {
     return (
       <View style={[styles.centerContainer, { backgroundColor: colors.background }]}>
         <ActivityIndicator size="large" color={colors.primary} />
+      </View>
+    );
+  }
+
+  if (resetting) {
+    return (
+      <View style={[styles.centerContainer, { backgroundColor: colors.background }]}>
+        <ActivityIndicator size="large" color={colors.primary} />
+        <Text style={[styles.nameText, { color: colors.text, marginTop: 16 }]}>
+          Re-scanning faces...
+        </Text>
+        <Text style={[styles.nameText, { color: colors.text, opacity: 0.6, marginTop: 8 }]}>
+          This may take a few minutes
+        </Text>
       </View>
     );
   }
@@ -178,7 +196,15 @@ export const PeopleScreen = () => {
 
   return (
     <View style={[styles.container, { backgroundColor: colors.background }]}>
-      <Text style={[styles.title, { color: colors.text }]}>People</Text>
+      <View style={styles.headerRow}>
+        <Text style={[styles.title, { color: colors.text }]}>People</Text>
+        <Pressable
+          style={[styles.rescanButton, { backgroundColor: colors.primary }]}
+          onPress={handleRescan}
+        >
+          <Text style={styles.rescanText}>Re-scan</Text>
+        </Pressable>
+      </View>
       <FlatList
         data={entities}
         keyExtractor={(item) => item.entity_id.toString()}
@@ -204,6 +230,22 @@ const styles = StyleSheet.create({
     fontWeight: 'bold',
     marginHorizontal: 16,
     marginVertical: 16,
+  },
+  headerRow: {
+    flexDirection: 'row',
+    justifyContent: 'space-between',
+    alignItems: 'center',
+    paddingRight: 16,
+  },
+  rescanButton: {
+    paddingHorizontal: 16,
+    paddingVertical: 8,
+    borderRadius: 20,
+  },
+  rescanText: {
+    color: '#fff',
+    fontSize: 14,
+    fontWeight: '600',
   },
   listContainer: {
     paddingBottom: 20,

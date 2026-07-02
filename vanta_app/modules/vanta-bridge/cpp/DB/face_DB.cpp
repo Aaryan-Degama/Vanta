@@ -141,10 +141,28 @@ bool run_face_pipeline(sqlite3* db, const std::string& abs_path, int64_t file_id
     for (size_t i = 0; i < faces.size(); ++i) {
         std::string crop_path = "";
         try {
-            cv::Mat aligned = face_model.align_face(image, faces[i], 320);
-            if (!aligned.empty()) {
-                std::string target_path = VantaConfig::instance().crop_path(std::to_string(file_id) + "_" + std::to_string(i) + ".jpg");
-                if (cv::imwrite(target_path, aligned)) {
+            // Save a padded bbox crop from the original image at native resolution.
+            // This avoids upscaling small faces (which causes blur with aligned warps).
+            const auto& bbox = faces[i].bbox;
+            float pad_x = bbox.width * 0.4f;
+            float pad_y = bbox.height * 0.4f;
+            int x1 = std::max(0, static_cast<int>(bbox.x - pad_x));
+            int y1 = std::max(0, static_cast<int>(bbox.y - pad_y));
+            int x2 = std::min(image.cols, static_cast<int>(bbox.x + bbox.width + pad_x));
+            int y2 = std::min(image.rows, static_cast<int>(bbox.y + bbox.height + pad_y));
+
+            if (x2 > x1 && y2 > y1) {
+                cv::Mat face_crop = image(cv::Rect(x1, y1, x2 - x1, y2 - y1)).clone();
+
+                // Make it square by center-cropping the longer dimension
+                int crop_size = std::min(face_crop.cols, face_crop.rows);
+                int dx = (face_crop.cols - crop_size) / 2;
+                int dy = (face_crop.rows - crop_size) / 2;
+                cv::Mat square_crop = face_crop(cv::Rect(dx, dy, crop_size, crop_size));
+
+                int64_t ts = static_cast<int64_t>(std::time(nullptr));
+                std::string target_path = VantaConfig::instance().crop_path(std::to_string(file_id) + "_" + std::to_string(i) + "_" + std::to_string(ts) + ".jpg");
+                if (cv::imwrite(target_path, square_crop)) {
                     crop_path = target_path;
                 } else {
                     LOGE("cv::imwrite failed for crop %s", target_path.c_str());
@@ -218,8 +236,8 @@ bool cluster_faces_for_file(sqlite3* db, int64_t file_id) {
         return true; 
     }
 
-    const float GOOD_THRESHOLD = 0.6f;
-    const float BLURRY_THRESHOLD = 0.75f;
+    const float GOOD_THRESHOLD = 1.0f;
+    const float BLURRY_THRESHOLD = 1.1f;
     const float BLURRY_DET_SCORE_THRESHOLD = 0.5f;
 
     sqlite3_stmt* match_stmt = nullptr;
@@ -423,7 +441,7 @@ void recluster_pending_faces(sqlite3* db) {
 
     sqlite3_exec(db, "BEGIN TRANSACTION;", nullptr, nullptr, nullptr);
 
-    const float BLURRY_THRESHOLD = 0.75f;
+    const float BLURRY_THRESHOLD = 1.1f;
 
     sqlite3_stmt* match_stmt = nullptr;
     const char* match_sql = "SELECT entity_id, distance FROM person_centroids WHERE embedding MATCH ? AND k = 1";
@@ -498,4 +516,185 @@ void recluster_pending_faces(sqlite3* db) {
 
     sqlite3_exec(db, "COMMIT;", nullptr, nullptr, nullptr);
     LOGI("Second pass reclustering completed.");
+}
+
+void merge_similar_entities(sqlite3* db) {
+    if (!db) return;
+
+    LOGI("Starting entity merge pass...");
+
+    const float MERGE_THRESHOLD = 1.0f;  // L2 distance for centroids (cos_sim >= 0.5)
+
+    // Fetch all entity centroids with their sample counts
+    struct EntityCentroid {
+        int64_t entity_id;
+        int sample_count;
+        std::vector<float> embedding;
+        bool merged = false;
+    };
+
+    const char* fetch_sql = R"(
+        SELECT e.entity_id, e.sample_count, pc.embedding
+        FROM entities e
+        JOIN person_centroids pc ON e.entity_id = pc.entity_id
+        ORDER BY e.sample_count DESC
+    )";
+
+    sqlite3_stmt* fetch_stmt = nullptr;
+    if (sqlite3_prepare_v2(db, fetch_sql, -1, &fetch_stmt, nullptr) != SQLITE_OK) {
+        LOGE("merge_similar_entities: failed to prepare fetch: %s", sqlite3_errmsg(db));
+        return;
+    }
+
+    std::vector<EntityCentroid> all_entities;
+    while (sqlite3_step(fetch_stmt) == SQLITE_ROW) {
+        EntityCentroid ec;
+        ec.entity_id = sqlite3_column_int64(fetch_stmt, 0);
+        ec.sample_count = sqlite3_column_int(fetch_stmt, 1);
+        const void* blob = sqlite3_column_blob(fetch_stmt, 2);
+        int bytes = sqlite3_column_bytes(fetch_stmt, 2);
+        if (blob && bytes == 512 * sizeof(float)) {
+            ec.embedding.resize(512);
+            std::memcpy(ec.embedding.data(), blob, bytes);
+            all_entities.push_back(ec);
+        }
+    }
+    sqlite3_finalize(fetch_stmt);
+
+    if (all_entities.size() < 2) {
+        LOGI("Not enough entities to merge (%zu).", all_entities.size());
+        return;
+    }
+
+    // Greedy merge: for each entity (sorted by sample_count desc), find nearest
+    // un-merged entity. If distance < threshold, merge smaller into larger.
+    int merge_count = 0;
+
+    sqlite3_exec(db, "BEGIN TRANSACTION;", nullptr, nullptr, nullptr);
+
+    for (size_t i = 0; i < all_entities.size(); ++i) {
+        if (all_entities[i].merged) continue;
+
+        for (size_t j = i + 1; j < all_entities.size(); ++j) {
+            if (all_entities[j].merged) continue;
+
+            // Compute L2 distance between centroids
+            float dist_sq = 0.0f;
+            for (int d = 0; d < 512; ++d) {
+                float diff = all_entities[i].embedding[d] - all_entities[j].embedding[d];
+                dist_sq += diff * diff;
+            }
+            float dist = std::sqrt(dist_sq);
+
+            if (dist <= MERGE_THRESHOLD) {
+                int64_t keeper_id = all_entities[i].entity_id;
+                int64_t merged_id = all_entities[j].entity_id;
+
+                LOGI("Merging entity %ld into %ld (distance=%.4f)",
+                     (long)merged_id, (long)keeper_id, dist);
+
+                // Move face_detections
+                const char* move_det_sql = "UPDATE face_detections SET entity_id = ? WHERE entity_id = ?";
+                sqlite3_stmt* s = nullptr;
+                sqlite3_prepare_v2(db, move_det_sql, -1, &s, nullptr);
+                sqlite3_bind_int64(s, 1, keeper_id);
+                sqlite3_bind_int64(s, 2, merged_id);
+                sqlite3_step(s);
+                sqlite3_finalize(s);
+
+                // Move entity_memberships
+                const char* move_mem_sql = "INSERT OR IGNORE INTO entity_memberships (entity_id, file_id, created_at) SELECT ?, file_id, created_at FROM entity_memberships WHERE entity_id = ?";
+                sqlite3_prepare_v2(db, move_mem_sql, -1, &s, nullptr);
+                sqlite3_bind_int64(s, 1, keeper_id);
+                sqlite3_bind_int64(s, 2, merged_id);
+                sqlite3_step(s);
+                sqlite3_finalize(s);
+
+                const char* del_mem_sql = "DELETE FROM entity_memberships WHERE entity_id = ?";
+                sqlite3_prepare_v2(db, del_mem_sql, -1, &s, nullptr);
+                sqlite3_bind_int64(s, 1, merged_id);
+                sqlite3_step(s);
+                sqlite3_finalize(s);
+
+                // Recompute keeper centroid as weighted average
+                float total = (float)(all_entities[i].sample_count + all_entities[j].sample_count);
+                float w_i = (float)all_entities[i].sample_count / total;
+                float w_j = (float)all_entities[j].sample_count / total;
+                std::vector<float> new_centroid(512);
+                float norm = 0.0f;
+                for (int d = 0; d < 512; ++d) {
+                    new_centroid[d] = all_entities[i].embedding[d] * w_i + all_entities[j].embedding[d] * w_j;
+                    norm += new_centroid[d] * new_centroid[d];
+                }
+                norm = std::sqrt(norm);
+                if (norm > 0) {
+                    for (int d = 0; d < 512; ++d) new_centroid[d] /= norm;
+                }
+
+                // Update keeper centroid
+                const char* upd_cent_sql = "UPDATE person_centroids SET embedding = ? WHERE entity_id = ?";
+                sqlite3_prepare_v2(db, upd_cent_sql, -1, &s, nullptr);
+                sqlite3_bind_blob(s, 1, new_centroid.data(), 512 * sizeof(float), SQLITE_TRANSIENT);
+                sqlite3_bind_int64(s, 2, keeper_id);
+                sqlite3_step(s);
+                sqlite3_finalize(s);
+
+                // Update keeper sample_count
+                int new_count = all_entities[i].sample_count + all_entities[j].sample_count;
+                int64_t now = static_cast<int64_t>(std::time(nullptr));
+                const char* upd_ent_sql = "UPDATE entities SET sample_count = ?, updated_at = ? WHERE entity_id = ?";
+                sqlite3_prepare_v2(db, upd_ent_sql, -1, &s, nullptr);
+                sqlite3_bind_int(s, 1, new_count);
+                sqlite3_bind_int64(s, 2, now);
+                sqlite3_bind_int64(s, 3, keeper_id);
+                sqlite3_step(s);
+                sqlite3_finalize(s);
+
+                // Delete merged entity centroid and entity row
+                const char* del_cent_sql = "DELETE FROM person_centroids WHERE entity_id = ?";
+                sqlite3_prepare_v2(db, del_cent_sql, -1, &s, nullptr);
+                sqlite3_bind_int64(s, 1, merged_id);
+                sqlite3_step(s);
+                sqlite3_finalize(s);
+
+                const char* del_ent_sql = "DELETE FROM entities WHERE entity_id = ?";
+                sqlite3_prepare_v2(db, del_ent_sql, -1, &s, nullptr);
+                sqlite3_bind_int64(s, 1, merged_id);
+                sqlite3_step(s);
+                sqlite3_finalize(s);
+
+                // Update in-memory state
+                all_entities[i].embedding = new_centroid;
+                all_entities[i].sample_count = new_count;
+                all_entities[j].merged = true;
+                merge_count++;
+            }
+        }
+    }
+
+    sqlite3_exec(db, "COMMIT;", nullptr, nullptr, nullptr);
+    LOGI("Entity merge pass completed: %d merges performed.", merge_count);
+}
+
+bool reset_face_data(sqlite3* db) {
+    if (!db) return false;
+
+    LOGI("Resetting all face data for re-indexing...");
+
+    sqlite3_exec(db, "BEGIN TRANSACTION;", nullptr, nullptr, nullptr);
+
+    // Clear all face-related tables
+    sqlite3_exec(db, "DELETE FROM entity_memberships;", nullptr, nullptr, nullptr);
+    sqlite3_exec(db, "DELETE FROM face_vec;", nullptr, nullptr, nullptr);
+    sqlite3_exec(db, "DELETE FROM face_detections;", nullptr, nullptr, nullptr);
+    sqlite3_exec(db, "DELETE FROM person_centroids;", nullptr, nullptr, nullptr);
+    sqlite3_exec(db, "DELETE FROM entities;", nullptr, nullptr, nullptr);
+
+    // Reset face_count so face pipeline re-runs for all images
+    sqlite3_exec(db, "UPDATE files SET face_count = NULL;", nullptr, nullptr, nullptr);
+
+    sqlite3_exec(db, "COMMIT;", nullptr, nullptr, nullptr);
+
+    LOGI("Face data reset complete.");
+    return true;
 }

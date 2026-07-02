@@ -95,8 +95,8 @@ class IndexingService : Service() {
             "clip_text_fp16.onnx",
             "vocab.json",
             "merges.txt",
-            "det_500m.onnx",
-            "w600k_mbf.onnx"
+            "det_10g.onnx",
+            "w600k_r50.onnx"
         )
 
         for (fileName in filesToCopy) {

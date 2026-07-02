@@ -125,6 +125,11 @@ class VantaEngineModule : Module() {
      */
     private external fun setOwnerEntityIdNative(entityId: Long)
 
+    /**
+     * Resets all face data and re-runs face detection/clustering on indexed images.
+     */
+    private external fun resetFaceDataNative(dbPath: String): Boolean
+
     //endregion
 
     /**
@@ -142,8 +147,8 @@ class VantaEngineModule : Module() {
             "clip_text_fp16.onnx",
             "vocab.json",
             "merges.txt",
-            "det_500m.onnx",
-            "w600k_mbf.onnx",
+            "det_10g.onnx",
+            "w600k_r50.onnx",
             "ner_model.onnx",
             "ner_vocab.txt",
             "label_map.json"
@@ -410,6 +415,32 @@ class VantaEngineModule : Module() {
 
             val prefs = context.getSharedPreferences("vanta_prefs", Context.MODE_PRIVATE)
             prefs.getLong("owner_entity_id", -1L)
+        }
+
+        AsyncFunction("resetFaceData") { promise: Promise ->
+            val context = appContext.reactContext
+            if (context == null) {
+                promise.reject("ERR", "Android context unavailable", null)
+                return@AsyncFunction
+            }
+
+            val dbPath = VantaEngineConfig.getDatabasePath(context)
+            if (!java.io.File(dbPath).exists()) {
+                promise.resolve(false)
+                return@AsyncFunction
+            }
+
+            Thread {
+                try {
+                    extractAssetsIfNeeded(context)
+                    setModelsDirNative(VantaEngineConfig.getModelsDirectory(context))
+                    setCropsDirNative(VantaEngineConfig.getCropsDirectory(context))
+                    val result = resetFaceDataNative(dbPath)
+                    promise.resolve(result)
+                } catch (e: Exception) {
+                    promise.reject("ERR", e.message, e)
+                }
+            }.start()
         }
     }
 

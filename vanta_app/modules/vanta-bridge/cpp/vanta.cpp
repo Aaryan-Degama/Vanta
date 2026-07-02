@@ -402,7 +402,9 @@ Java_expo_modules_vantaengine_VantaEngineModule_generateEmbeddingsNative(
         g_index_status = "finished";
         LOGI("Finished generating embeddings for all images. Running second pass reclustering...");
         recluster_pending_faces(db);
-        LOGI("Second pass reclustering finished.");
+        LOGI("Second pass reclustering finished. Running entity merge pass...");
+        merge_similar_entities(db);
+        LOGI("Entity merge pass finished.");
     }
 
     sqlite3_close(db);
@@ -845,4 +847,100 @@ Java_expo_modules_vantaengine_VantaEngineModule_setOwnerEntityIdNative(
 
     g_owner_entity_id = static_cast<int64_t>(entityId);
     LOGI("Owner entity ID set to: %ld", (long)g_owner_entity_id);
+}
+
+extern "C" JNIEXPORT jboolean JNICALL
+Java_expo_modules_vantaengine_VantaEngineModule_resetFaceDataNative(
+    JNIEnv* env,
+    jobject /* this */,
+    jstring dbPath) {
+
+    if (dbPath == nullptr) return JNI_FALSE;
+
+    const char* db_path_cstr = env->GetStringUTFChars(dbPath, nullptr);
+    std::string db_path(db_path_cstr);
+    env->ReleaseStringUTFChars(dbPath, db_path_cstr);
+
+    // Ensure sqlite-vec is registered
+    sqlite3_auto_extension((void (*)())sqlite3_vec_init);
+
+    sqlite3* db = initialize_database(db_path);
+    if (!db) {
+        LOGE("Failed to open DB for resetFaceData");
+        return JNI_FALSE;
+    }
+
+    if (!init_face_schema(db)) {
+        LOGE("Failed to init face schema for reset");
+        sqlite3_close(db);
+        return JNI_FALSE;
+    }
+
+    // Wipe all face data
+    if (!reset_face_data(db)) {
+        LOGE("Failed to reset face data");
+        sqlite3_close(db);
+        return JNI_FALSE;
+    }
+
+    // Delete crop files from disk
+    std::string crops_dir = VantaConfig::instance().crops_dir();
+    if (!crops_dir.empty()) {
+        std::string cmd = "rm -rf " + crops_dir + "/*";
+        system(cmd.c_str());
+        LOGI("Cleared crop files from: %s", crops_dir.c_str());
+    }
+
+    // Re-run face pipeline on all indexed picture files (skip CLIP)
+    LOGI("Re-running face pipeline on all indexed images...");
+
+    {
+        std::lock_guard<std::mutex> lock(g_session_mutex);
+        if (!g_face_session) {
+            g_face_session = new Face_embedding();
+        }
+        if (!g_face_session->is_loaded()) {
+            if (!g_face_session->load()) {
+                LOGE("Failed to load Face model for re-indexing");
+                sqlite3_close(db);
+                return JNI_FALSE;
+            }
+        }
+    }
+
+    // Query all indexed picture files
+    const char* sql = "SELECT id, abs_path FROM files WHERE filetype = 'picture' AND status = 'indexed'";
+    sqlite3_stmt* stmt = nullptr;
+    if (sqlite3_prepare_v2(db, sql, -1, &stmt, nullptr) != SQLITE_OK) {
+        LOGE("Failed to query indexed files for face re-processing: %s", sqlite3_errmsg(db));
+        sqlite3_close(db);
+        return JNI_FALSE;
+    }
+
+    int processed = 0;
+    while (sqlite3_step(stmt) == SQLITE_ROW) {
+        int64_t file_id = sqlite3_column_int64(stmt, 0);
+        const char* path = reinterpret_cast<const char*>(sqlite3_column_text(stmt, 1));
+        if (!path) continue;
+
+        std::string abs_path(path);
+        if (run_face_pipeline(db, abs_path, file_id, *g_face_session)) {
+            cluster_faces_for_file(db, file_id);
+            processed++;
+        }
+
+        if (processed % 100 == 0 && processed > 0) {
+            LOGI("Face re-processing progress: %d files", processed);
+        }
+    }
+    sqlite3_finalize(stmt);
+
+    LOGI("Face re-processing complete: %d files processed. Running recluster...", processed);
+    recluster_pending_faces(db);
+    LOGI("Running entity merge...");
+    merge_similar_entities(db);
+    LOGI("Face data reset and re-indexed successfully.");
+
+    sqlite3_close(db);
+    return JNI_TRUE;
 }

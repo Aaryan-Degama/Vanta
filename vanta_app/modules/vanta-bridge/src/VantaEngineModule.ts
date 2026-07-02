@@ -69,6 +69,9 @@ declare class VantaEngineModule extends NativeModule<Record<string, never>> {
 
   // Returns the current owner entity ID (-1 if not set).
   getOwnerEntityId(): Promise<number>;
+
+  // Resets all face data and re-runs face pipeline with updated thresholds.
+  resetFaceData(): Promise<boolean>;
 }
 
 // `requireNativeModule` resolves the platform-specific implementation at runtime.

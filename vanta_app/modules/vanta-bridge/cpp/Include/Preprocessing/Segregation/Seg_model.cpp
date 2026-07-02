@@ -21,10 +21,10 @@ bool Face_embedding::load() {
 
     // Resolve model paths from the runtime config before loading.
     if (detector_path.empty()) {
-        detector_path = VantaConfig::instance().model_path("det_500m.onnx");
+        detector_path = VantaConfig::instance().model_path("det_10g.onnx");
     }
     if (extractor_path.empty()) {
-        extractor_path = VantaConfig::instance().model_path("w600k_mbf.onnx");
+        extractor_path = VantaConfig::instance().model_path("w600k_r50.onnx");
     }
 
     if (d_loaded) {

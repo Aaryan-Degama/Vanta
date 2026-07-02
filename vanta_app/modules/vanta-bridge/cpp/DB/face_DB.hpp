@@ -11,3 +11,5 @@ bool save_face_embedding(sqlite3* db, int64_t detection_id, const std::vector<fl
 bool run_face_pipeline(sqlite3* db, const std::string& abs_path, int64_t file_id, Face_embedding& face_model);
 bool cluster_faces_for_file(sqlite3* db, int64_t file_id);
 void recluster_pending_faces(sqlite3* db);
+void merge_similar_entities(sqlite3* db);
+bool reset_face_data(sqlite3* db);
