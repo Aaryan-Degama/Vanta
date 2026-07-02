@@ -162,7 +162,7 @@ FaceCrop get_best_face_crop(sqlite3* db, int64_t entity_id) {
     crop.det_score = 0.0f;
 
     sqlite3_stmt* stmt = nullptr;
-    const char* sql_quality = "SELECT fd.file_id, f.abs_path, fd.bbox_x, fd.bbox_y, fd.bbox_w, fd.bbox_h, fd.aligned_crop_path, fd.det_score FROM face_detections fd JOIN files f ON f.id = fd.file_id WHERE fd.entity_id = ? AND fd.det_score > 0.65 AND fd.bbox_w > 60 AND fd.bbox_h > 60 ORDER BY (fd.bbox_w * fd.bbox_h) DESC LIMIT 1";
+    const char* sql_quality = "SELECT fd.file_id, f.abs_path, fd.bbox_x, fd.bbox_y, fd.bbox_w, fd.bbox_h, fd.aligned_crop_path, fd.det_score FROM face_detections fd JOIN files f ON f.id = fd.file_id WHERE fd.entity_id = ? AND fd.det_score > 0.65 AND fd.bbox_w > 60 AND fd.bbox_h > 60 ORDER BY fd.det_score DESC LIMIT 1";
 
     bool found = false;
 
@@ -191,7 +191,7 @@ FaceCrop get_best_face_crop(sqlite3* db, int64_t entity_id) {
     }
 
     if (!found) {
-        const char* sql_fallback = "SELECT fd.file_id, f.abs_path, fd.bbox_x, fd.bbox_y, fd.bbox_w, fd.bbox_h, fd.aligned_crop_path, fd.det_score FROM face_detections fd JOIN files f ON f.id = fd.file_id WHERE fd.entity_id = ? ORDER BY (fd.bbox_w * fd.bbox_h) DESC LIMIT 1";
+        const char* sql_fallback = "SELECT fd.file_id, f.abs_path, fd.bbox_x, fd.bbox_y, fd.bbox_w, fd.bbox_h, fd.aligned_crop_path, fd.det_score FROM face_detections fd JOIN files f ON f.id = fd.file_id WHERE fd.entity_id = ? ORDER BY fd.det_score DESC LIMIT 1";
         
         if (sqlite3_prepare_v2(db, sql_fallback, -1, &stmt, nullptr) == SQLITE_OK) {
             sqlite3_bind_int64(stmt, 1, entity_id);

@@ -937,8 +937,6 @@ Java_expo_modules_vantaengine_VantaEngineModule_resetFaceDataNative(
 
     LOGI("Face re-processing complete: %d files processed. Running recluster...", processed);
     recluster_pending_faces(db);
-    LOGI("Running entity merge...");
-    merge_similar_entities(db);
     LOGI("Face data reset and re-indexed successfully.");
 
     sqlite3_close(db);

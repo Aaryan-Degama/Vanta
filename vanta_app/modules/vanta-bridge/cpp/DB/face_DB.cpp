@@ -141,28 +141,11 @@ bool run_face_pipeline(sqlite3* db, const std::string& abs_path, int64_t file_id
     for (size_t i = 0; i < faces.size(); ++i) {
         std::string crop_path = "";
         try {
-            // Save a padded bbox crop from the original image at native resolution.
-            // This avoids upscaling small faces (which causes blur with aligned warps).
-            const auto& bbox = faces[i].bbox;
-            float pad_x = bbox.width * 0.4f;
-            float pad_y = bbox.height * 0.4f;
-            int x1 = std::max(0, static_cast<int>(bbox.x - pad_x));
-            int y1 = std::max(0, static_cast<int>(bbox.y - pad_y));
-            int x2 = std::min(image.cols, static_cast<int>(bbox.x + bbox.width + pad_x));
-            int y2 = std::min(image.rows, static_cast<int>(bbox.y + bbox.height + pad_y));
-
-            if (x2 > x1 && y2 > y1) {
-                cv::Mat face_crop = image(cv::Rect(x1, y1, x2 - x1, y2 - y1)).clone();
-
-                // Make it square by center-cropping the longer dimension
-                int crop_size = std::min(face_crop.cols, face_crop.rows);
-                int dx = (face_crop.cols - crop_size) / 2;
-                int dy = (face_crop.rows - crop_size) / 2;
-                cv::Mat square_crop = face_crop(cv::Rect(dx, dy, crop_size, crop_size));
-
-                int64_t ts = static_cast<int64_t>(std::time(nullptr));
-                std::string target_path = VantaConfig::instance().crop_path(std::to_string(file_id) + "_" + std::to_string(i) + "_" + std::to_string(ts) + ".jpg");
-                if (cv::imwrite(target_path, square_crop)) {
+            cv::Mat aligned = face_model.align_face(image, faces[i], 320);
+            if (!aligned.empty()) {
+                std::string target_path = VantaConfig::instance().crop_path(
+                    std::to_string(file_id) + "_" + std::to_string(i) + ".jpg");
+                if (cv::imwrite(target_path, aligned)) {
                     crop_path = target_path;
                 } else {
                     LOGE("cv::imwrite failed for crop %s", target_path.c_str());
@@ -236,8 +219,8 @@ bool cluster_faces_for_file(sqlite3* db, int64_t file_id) {
         return true; 
     }
 
-    const float GOOD_THRESHOLD = 1.0f;
-    const float BLURRY_THRESHOLD = 1.1f;
+    const float GOOD_THRESHOLD = 0.6f;
+    const float BLURRY_THRESHOLD = 0.75f;
     const float BLURRY_DET_SCORE_THRESHOLD = 0.5f;
 
     sqlite3_stmt* match_stmt = nullptr;
@@ -441,7 +424,7 @@ void recluster_pending_faces(sqlite3* db) {
 
     sqlite3_exec(db, "BEGIN TRANSACTION;", nullptr, nullptr, nullptr);
 
-    const float BLURRY_THRESHOLD = 1.1f;
+    const float BLURRY_THRESHOLD = 0.75f;
 
     sqlite3_stmt* match_stmt = nullptr;
     const char* match_sql = "SELECT entity_id, distance FROM person_centroids WHERE embedding MATCH ? AND k = 1";
