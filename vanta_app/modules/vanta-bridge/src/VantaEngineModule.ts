@@ -37,6 +37,9 @@ declare class VantaEngineModule extends NativeModule<Record<string, never>> {
   // Searches indexed images with a natural-language query.
   searchImages(query: string): Promise<string>;
 
+  // Sets global search options (Graph Search, Spell Check, Intent Extraction).
+  setSearchOptions(useGraph: boolean, useSpellCheck: boolean, useIntent: boolean): Promise<void>;
+
   // Face-clustering API: returns the top entities as a JSON string.
   getTopEntities(): Promise<string>;
 

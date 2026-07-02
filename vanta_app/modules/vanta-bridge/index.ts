@@ -73,3 +73,10 @@ export async function getDatabaseStats(): Promise<string> {
 export async function searchImages(query: string): Promise<string> {
   return await VantaEngineModule.searchImages(query);
 }
+
+/**
+ * Sets global search options for the native C++ pipeline.
+ */
+export async function setSearchOptions(useGraph: boolean, useSpellCheck: boolean, useIntent: boolean): Promise<void> {
+  return await VantaEngineModule.setSearchOptions(useGraph, useSpellCheck, useIntent);
+}

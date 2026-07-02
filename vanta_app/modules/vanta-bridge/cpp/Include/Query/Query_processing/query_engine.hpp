@@ -24,6 +24,9 @@ struct EntityCandidate;
 // Initializes the query engine, loading any necessary text models.
 bool init_query_engine(const std::string& db_path = "");
 
+// Sets optional search feature toggles globally
+void set_query_options(bool use_graph, bool use_spellcheck, bool use_intent);
+
 // Rebuilds the query engine dictionary dynamically from the database.
 void rebuild_query_engine_dictionary(const std::string& db_path);
 

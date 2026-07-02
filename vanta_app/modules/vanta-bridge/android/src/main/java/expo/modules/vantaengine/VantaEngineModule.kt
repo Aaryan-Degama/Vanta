@@ -82,6 +82,11 @@ class VantaEngineModule : Module() {
     private external fun searchImagesNative(dbPath: String, query: String): String
 
     /**
+     * Sets search pipeline options in C++.
+     */
+    private external fun setSearchOptionsNative(useGraph: Boolean, useSpellCheck: Boolean, useIntent: Boolean)
+
+    /**
      * Returns the top face entities as a JSON string.
      */
     private external fun getTopEntitiesNative(dbPath: String): String
@@ -415,6 +420,10 @@ class VantaEngineModule : Module() {
 
             val prefs = context.getSharedPreferences("vanta_prefs", Context.MODE_PRIVATE)
             prefs.getLong("owner_entity_id", -1L)
+        }
+
+        AsyncFunction("setSearchOptions") { useGraph: Boolean, useSpellCheck: Boolean, useIntent: Boolean ->
+            setSearchOptionsNative(useGraph, useSpellCheck, useIntent)
         }
 
         AsyncFunction("resetFaceData") { promise: Promise ->

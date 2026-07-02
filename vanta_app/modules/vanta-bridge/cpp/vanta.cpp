@@ -221,7 +221,7 @@ Java_expo_modules_vantaengine_VantaEngineModule_getStoredFilesNative(
     env->ReleaseStringUTFChars(dbPath, db_path_cstr);
 
     // Query files from C++ SQLite
-    std::vector<file_meta> files = get_files(db_path, 100);
+    std::vector<file_meta> files = get_files(db_path, 100 );
 
     // Build a Java HashMap for each row and return as Object[]
     jclass hashMapClass = env->FindClass("java/util/HashMap");
@@ -847,6 +847,17 @@ Java_expo_modules_vantaengine_VantaEngineModule_setOwnerEntityIdNative(
 
     g_owner_entity_id = static_cast<int64_t>(entityId);
     LOGI("Owner entity ID set to: %ld", (long)g_owner_entity_id);
+}
+
+extern "C" JNIEXPORT void JNICALL
+Java_expo_modules_vantaengine_VantaEngineModule_setSearchOptionsNative(
+    JNIEnv* env,
+    jobject /* this */,
+    jboolean useGraph,
+    jboolean useSpellCheck,
+    jboolean useIntent) {
+    
+    set_query_options(useGraph, useSpellCheck, useIntent);
 }
 
 extern "C" JNIEXPORT jboolean JNICALL

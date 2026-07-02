@@ -19,6 +19,18 @@
 static VantaProductionAnalyzer* g_analyzer = nullptr;
 static vanta::query::IntentBuilder* g_intent_builder = nullptr;
 
+static bool g_use_graph = true;
+static bool g_use_spellcheck = true;
+static bool g_use_intent = true;
+
+void set_query_options(bool use_graph, bool use_spellcheck, bool use_intent) {
+    g_use_graph = use_graph;
+    g_use_spellcheck = use_spellcheck;
+    g_use_intent = use_intent;
+    LOGI("Search options updated: Graph=%d, SpellCheck=%d, Intent=%d", 
+         g_use_graph, g_use_spellcheck, g_use_intent);
+}
+
 // ── Helper: lowercase ──
 static std::string to_lower(const std::string& s) {
     std::string out = s;
@@ -361,83 +373,91 @@ std::vector<search_result> search_images(
     }
 
     // ── Step 1: Typo-correct ──
-    std::string corrected_query = get_corrected_query(raw_query, db_path);
-    LOGI("search_images: raw='%s' corrected='%s'", raw_query.c_str(), corrected_query.c_str());
+    std::string corrected_query = raw_query;
+    if (g_use_spellcheck) {
+        corrected_query = get_corrected_query(raw_query, db_path);
+        LOGI("search_images: raw='%s' corrected='%s'", raw_query.c_str(), corrected_query.c_str());
+    } else {
+        LOGI("search_images: raw='%s' (spellcheck disabled)", raw_query.c_str());
+    }
 
     // ── Step 2: Run NER ──
     std::vector<vanta::ner::NERSpan> spans;
-    if (ner_model && ner_model->is_loaded()) {
-        spans = ner_model->run(corrected_query);
-        LOGI("NER returned %zu spans", spans.size());
-        for (const auto& sp : spans) {
-            LOGI(" span: label='%s' text='%s'", sp.label.c_str(), sp.text.c_str());
-        }
-    }
-
-    // ── Step 3: Resolve spans ──
     std::vector<int64_t> resolved_entity_ids;
     std::vector<std::string> unresolved_words;
     std::unordered_set<std::string> resolved_span_texts;
 
-    if (!spans.empty()) {
-        sqlite3* resolve_db = nullptr;
-        sqlite3_auto_extension((void (*)())sqlite3_vec_init);
-        if (sqlite3_open_v2(db_path.c_str(), &resolve_db, SQLITE_OPEN_READONLY, nullptr) == SQLITE_OK) {
-            std::vector<EntityCandidate> candidates = get_all_person_entities(resolve_db);
-            sqlite3_close(resolve_db);
-
-            for (const auto& span : spans) {
-                if (span.label == "SELF") {
-                    if (owner_entity_id != -1) {
-                        resolved_entity_ids.push_back(owner_entity_id);
-                        resolved_span_texts.insert(to_lower(span.text));
-                        LOGI("SELF span '%s' → owner entity %ld", span.text.c_str(), (long)owner_entity_id);
-                    } else {
-                        LOGI("SELF span '%s' but no owner set, keeping for CLIP", span.text.c_str());
-                        unresolved_words.push_back(span.text);
-                    }
-                } else if (span.label == "PERSON") {
-                    int64_t eid = resolve_span_to_entity_id(span.text, candidates, owner_entity_id);
-                    if (eid != -1) {
-                        resolved_entity_ids.push_back(eid);
-                        resolved_span_texts.insert(to_lower(span.text));
-                    } else {
-                        LOGI("PERSON span '%s' unresolved, keeping for CLIP", span.text.c_str());
-                        unresolved_words.push_back(span.text);
-                    }
-                } else if (span.label == "RELATION") {
-                    // FIX #1: Resolve RELATION spans against entity relation column
-                    int64_t eid = resolve_span_to_entity_id(span.text, candidates, owner_entity_id);
-                    if (eid != -1) {
-                        resolved_entity_ids.push_back(eid);
-                        resolved_span_texts.insert(to_lower(span.text));
-                        LOGI("RELATION span '%s' → entity %ld", span.text.c_str(), (long)eid);
-                    } else {
-                        LOGI("RELATION span '%s' unresolved, keeping for CLIP", span.text.c_str());
-                        unresolved_words.push_back(span.text);
-                    }
-                }
+    if (g_use_graph) {
+        if (ner_model && ner_model->is_loaded()) {
+            spans = ner_model->run(corrected_query);
+            LOGI("NER returned %zu spans", spans.size());
+            for (const auto& sp : spans) {
+                LOGI(" span: label='%s' text='%s'", sp.label.c_str(), sp.text.c_str());
             }
         }
 
-        std::sort(resolved_entity_ids.begin(), resolved_entity_ids.end());
-        resolved_entity_ids.erase(
-            std::unique(resolved_entity_ids.begin(), resolved_entity_ids.end()),
-            resolved_entity_ids.end());
-        resolved_entity_ids.erase(
-            std::remove(resolved_entity_ids.begin(), resolved_entity_ids.end(), -1),
-            resolved_entity_ids.end());
+        // ── Step 3: Resolve spans ──
+        if (!spans.empty()) {
+            sqlite3* resolve_db = nullptr;
+            sqlite3_auto_extension((void (*)())sqlite3_vec_init);
+            if (sqlite3_open_v2(db_path.c_str(), &resolve_db, SQLITE_OPEN_READONLY, nullptr) == SQLITE_OK) {
+                std::vector<EntityCandidate> candidates = get_all_person_entities(resolve_db);
+                sqlite3_close(resolve_db);
 
-        LOGI("Resolved %zu entity IDs, %zu unresolved words",
-             resolved_entity_ids.size(), unresolved_words.size());
-    }
+                for (const auto& span : spans) {
+                    if (span.label == "SELF") {
+                        if (owner_entity_id != -1) {
+                            resolved_entity_ids.push_back(owner_entity_id);
+                            resolved_span_texts.insert(to_lower(span.text));
+                            LOGI("SELF span '%s' → owner entity %ld", span.text.c_str(), (long)owner_entity_id);
+                        } else {
+                            LOGI("SELF span '%s' but no owner set, keeping for CLIP", span.text.c_str());
+                            unresolved_words.push_back(span.text);
+                        }
+                    } else if (span.label == "PERSON") {
+                        int64_t eid = resolve_span_to_entity_id(span.text, candidates, owner_entity_id);
+                        if (eid != -1) {
+                            resolved_entity_ids.push_back(eid);
+                            resolved_span_texts.insert(to_lower(span.text));
+                        } else {
+                            LOGI("PERSON span '%s' unresolved, keeping for CLIP", span.text.c_str());
+                            unresolved_words.push_back(span.text);
+                        }
+                    } else if (span.label == "RELATION") {
+                        int64_t eid = resolve_span_to_entity_id(span.text, candidates, owner_entity_id);
+                        if (eid != -1) {
+                            resolved_entity_ids.push_back(eid);
+                            resolved_span_texts.insert(to_lower(span.text));
+                            LOGI("RELATION span '%s' → entity %ld", span.text.c_str(), (long)eid);
+                        } else {
+                            LOGI("RELATION span '%s' unresolved, keeping for CLIP", span.text.c_str());
+                            unresolved_words.push_back(span.text);
+                        }
+                    }
+                }
+            }
 
-    // ── FIX #2: Fallback entity extraction when NER returns nothing ──
-    if (resolved_entity_ids.empty() && !corrected_query.empty()) {
-        LOGI("NER returned no resolvable spans. Trying fallback word-by-word entity resolution.");
-        fallback_entity_resolution(corrected_query, resolved_entity_ids, resolved_span_texts,
-                                   db_path, owner_entity_id);
-        LOGI("Fallback resolved %zu entity IDs", resolved_entity_ids.size());
+            std::sort(resolved_entity_ids.begin(), resolved_entity_ids.end());
+            resolved_entity_ids.erase(
+                std::unique(resolved_entity_ids.begin(), resolved_entity_ids.end()),
+                resolved_entity_ids.end());
+            resolved_entity_ids.erase(
+                std::remove(resolved_entity_ids.begin(), resolved_entity_ids.end(), -1),
+                resolved_entity_ids.end());
+
+            LOGI("Resolved %zu entity IDs, %zu unresolved words",
+                 resolved_entity_ids.size(), unresolved_words.size());
+        }
+
+        // Fallback entity extraction when NER returns nothing
+        if (resolved_entity_ids.empty() && !corrected_query.empty()) {
+            LOGI("NER returned no resolvable spans. Trying fallback word-by-word entity resolution.");
+            fallback_entity_resolution(corrected_query, resolved_entity_ids, resolved_span_texts,
+                                       db_path, owner_entity_id);
+            LOGI("Fallback resolved %zu entity IDs", resolved_entity_ids.size());
+        }
+    } else {
+        LOGI("Graph Search disabled. Bypassing NER and span resolution.");
     }
 
     // ── Step 4: Build CLIP caption ──
@@ -468,8 +488,12 @@ std::vector<search_result> search_images(
         }
 
         if (!cleaned.empty()) {
-            clip_caption = g_intent_builder->buildIntent("", cleaned);
-            if (clip_caption.empty()) {
+            if (g_use_intent) {
+                clip_caption = g_intent_builder->buildIntent("", cleaned);
+                if (clip_caption.empty()) {
+                    clip_caption = cleaned;
+                }
+            } else {
                 clip_caption = cleaned;
             }
         }
