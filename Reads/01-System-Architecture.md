@@ -36,7 +36,7 @@
 
 ## Threading Model
 
-
+![Threading Model](./assets/threadingmodel.png)
 
 > **Rule:** `g_session_mutex` guards model loading. Inference (read-only) is thread-safe and does not need the mutex.
 
@@ -44,4 +44,4 @@
 
 ## Memory Model
 
-
+![Memory Model](./assets/Memory_model.png)

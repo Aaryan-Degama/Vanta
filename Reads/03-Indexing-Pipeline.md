@@ -168,11 +168,11 @@ JavaScript polls `getIndexProgress()` to show a progress bar.
 | Operation | Time per image | Notes |
 |-----------|---------------|-------|
 | Image load + resize | ~5-10 ms | Depends on original size |
-| CLIP embedding | ~50-100 ms | ONNX Runtime, CPU |
-| Face detection | ~20-40 ms | `det_10g` |
-| Face embedding (per face) | ~10-20 ms | `w600k_r50` |
-| Clustering + graph | ~1-5 ms | SQLite inserts |
-| **Total per image** | **~100-200 ms** | 1 face, 1024px image |
-| **Throughput** | **~5-10 images/sec** | Single-threaded |
+| CLIP embedding | ~150-200 ms | ONNX Runtime, CPU |
+| Face detection | ~40-60 ms | `det_10g` |
+| Face embedding (per face) | ~50-100 ms | `w600k_r50` |
+| Clustering + graph | ~10-20 ms | SQLite inserts |
+| **Total per image** | **~400-650 ms** | 1 face, 1024px image |
+| **Throughput** | **~2-3 images/sec** | Single-threaded |
 
 > **Optimization opportunity:** Batch CLIP inference (currently 1 image per run). Batch size 4-8 could improve throughput 2-3x.

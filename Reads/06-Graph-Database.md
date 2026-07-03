@@ -8,6 +8,8 @@
 
 Vanta doesn't use a dedicated graph database. Instead, it implements a **property graph** on top of SQLite using relational tables and the `sqlite-vec` extension for vector search. The graph is implicit in the relationships between `entities`, `files`, `face_detections`, and `entity_relation_files`.
 
+![Graph Traversal](./assets/Graph_traversal.png)
+
 
 
 ---

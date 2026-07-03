@@ -8,6 +8,8 @@
 
 The ingestion pipeline is the first step in Vanta's lifecycle. It scans the Android **MediaStore** (the system index of all media), classifies files by type, and batches them into SQLite. No embeddings are generated at this stage — only metadata registration.
 
+![Media Scanning Pipeline](./assets/Media_scanning_pipeline.png)
+
 
 
 ---
