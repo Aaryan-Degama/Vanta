@@ -18,6 +18,16 @@ Vanta is a React Native Android application that indexes your local media using 
 
 ---
 
+## Examples
+
+<div align="center">
+  <img src="./Reads/assets/search_example1.jpg" alt="Search Example 1" width="30%" />
+  <img src="./Reads/assets/search_example2.jpg" alt="Search Example 2" width="30%" />
+  <img src="./Reads/assets/seach_example_3.jpg" alt="Search Example 3" width="30%" />
+</div>
+
+---
+
 ## Tech Stack
 
 | Layer | Technology |
