@@ -183,9 +183,11 @@ Consecutive photos taken within 30 seconds are considered "burst shots" and only
 
 ## Query Examples & Pipeline Behavior
 
-![Search Example 1](./assets/search_example1.jpg)
-![Search Example 2](./assets/search_example2.jpg)
-![Search Example 3](./assets/seach_example_3.jpg)
+<p align="center">
+  <img src="./assets/search_example1.jpg" alt="Search Example 1" width="250" />
+  <img src="./assets/search_example2.jpg" alt="Search Example 2" width="250" />
+  <img src="./assets/seach_example_3.jpg" alt="Search Example 3" width="250" />
+</p>
 
 | Query | NER Spans | Resolved Entities | CLIP Caption | Candidate Source | Ranking |
 |-------|-----------|-------------------|--------------|----------------|---------|

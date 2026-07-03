@@ -105,7 +105,7 @@ C_new = α × E + (1 - α) × C_old    where α = 0.1
 
 ## 5. Entity Lifecycle
 
-![Peoples Screen](./assets/Peoples_sceen.png)
+<img src="./assets/Peoples_sceen.png" alt="Peoples Screen" width="250" />
 
 ### Entity Metadata
 
@@ -123,7 +123,7 @@ CREATE TABLE entities (
 
 ### Setting Metadata (from UI)
 
-![Setting Metadata](./assets/faceDetail1.jpg)
+<img src="./assets/faceDetail1.jpg" alt="Setting Metadata" width="250" />
 
 ---
 
@@ -131,7 +131,7 @@ CREATE TABLE entities (
 
 The People page shows one representative face per entity. Selection criteria:
 
-![Avatar Selection](./assets/faceDetail2.jpg)
+<img src="./assets/faceDetail2.jpg" alt="Avatar Selection" width="250" />
 
 **Current limitation:** The avatar is cropped from the original image using the bounding box. For Samsung-quality avatars, use the **pre-aligned 112×112 crop** instead.
 
