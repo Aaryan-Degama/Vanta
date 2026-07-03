@@ -21,7 +21,7 @@
 
 ## Asset Lifecycle
 
-![Vanta Logo](../vanta_logo.png)
+
 
 ---
 
@@ -44,33 +44,33 @@ Ort::Session session(g_ort_env, model_path, session_options);
 
 ## Model Loading Order
 
-![Vanta Logo](../vanta_logo.png)
+
 
 ---
 
 ## CLIP Inference
 
 ### Image Encoder
-![Vanta Logo](../vanta_logo.png)
+
 
 ### Text Encoder
-![Vanta Logo](../vanta_logo.png)
+
 
 ---
 
 ## Face Model Inference
 
 ### Detection
-![Vanta Logo](../vanta_logo.png)
+
 
 ### Recognition
-![Vanta Logo](../vanta_logo.png)
+
 
 ---
 
 ## NER Inference
 
-![Vanta Logo](../vanta_logo.png)
+
 
 ---
 
@@ -90,7 +90,7 @@ Current models use **FP16** (half-precision floats) to reduce size by ~50% vs FP
 
 ## Model Conversion Pipeline
 
-![Vanta Logo](../vanta_logo.png)
+
 
 ---
 

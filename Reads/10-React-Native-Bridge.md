@@ -6,7 +6,39 @@
 
 ## Architecture
 
-![Vanta Logo](../vanta_logo.png)
+```mermaid
+sequenceDiagram
+    autonumber
+    actor User
+    participant RN as React Native (UI)
+    participant API as TypeScript (vanta-bridge)
+    participant Module as Kotlin (VantaEngineModule)
+    participant JNI as C++ JNI (vanta.cpp)
+    participant Core as C++ Core (query_engine.cpp)
+    participant DB as SQLite / sqlite-vec
+
+    User->>RN: Types "me and mom at the beach"
+    RN->>API: searchImages("me and mom at the beach")
+    API->>Module: searchImagesNative(query)
+    Module->>JNI: Java_expo_modules...searchImagesNative()
+    
+    rect rgb(240, 248, 255)
+        Note over JNI,Core: Native C++ Execution
+        JNI->>Core: process_query(query)
+        Core->>Core: NER extraction [me, mom]
+        Core->>DB: Graph Traversal (Intersect entities)
+        DB-->>Core: Candidate File IDs
+        Core->>Core: CLIP Text Encoding ("at the beach")
+        Core->>DB: KNN Similarity Search on Candidates
+        DB-->>Core: Sorted Results
+    end
+    
+    Core-->>JNI: std::vector<Result>
+    JNI-->>Module: JSON String
+    Module-->>API: Promise<String>
+    API-->>RN: JSON.parse()
+    RN-->>User: Renders SearchScreen Grid
+```
 
 ---
 
@@ -171,15 +203,15 @@ function useIndexing(dbPath: string) {
 
 ### SearchScreen
 
-![Vanta Logo](../vanta_logo.png)
+
 
 ### PeopleScreen
 
-![Vanta Logo](../vanta_logo.png)
+
 
 ### EntityDetailScreen
 
-![Vanta Logo](../vanta_logo.png)
+
 
 ---
 

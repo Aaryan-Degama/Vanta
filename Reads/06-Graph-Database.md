@@ -8,7 +8,7 @@
 
 Vanta doesn't use a dedicated graph database. Instead, it implements a **property graph** on top of SQLite using relational tables and the `sqlite-vec` extension for vector search. The graph is implicit in the relationships between `entities`, `files`, `face_detections`, and `entity_relation_files`.
 
-![Vanta Logo](../vanta_logo.png)
+
 
 ---
 
@@ -80,7 +80,7 @@ CREATE TABLE entity_memberships (
 
 **Score computation:** The average cosine similarity between the face embedding in this file and the entity's centroid.
 
-![Vanta Logo](../vanta_logo.png)
+
 
 ### Edge Type 2: Entity ↔ Entity (Co-occurrence)
 
@@ -101,7 +101,7 @@ CREATE TABLE entity_relation_files (
 
 **Normalization:** `entity_a < entity_b` always (sorted pair). This prevents duplicate edges and makes lookups deterministic.
 
-![Vanta Logo](../vanta_logo.png)
+
 
 ### Edge Type 3: File → Embedding (Vector)
 
@@ -138,7 +138,7 @@ WHERE em.entity_id = ?
 ORDER BY em.score DESC;
 ```
 
-![Vanta Logo](../vanta_logo.png)
+
 
 ### Pattern 2: Two People → Photos Together
 
@@ -150,7 +150,7 @@ WHERE erf.entity_a = ? AND erf.entity_b = ?
 ORDER BY erf.co_occurrence_count DESC;
 ```
 
-![Vanta Logo](../vanta_logo.png)
+
 
 ### Pattern 3: Three+ People → Intersection
 
@@ -169,7 +169,7 @@ AND f.id IN (
 );
 ```
 
-![Vanta Logo](../vanta_logo.png)
+
 
 **Optimization:** Find the entity with the smallest membership set first, then filter.
 
@@ -195,19 +195,19 @@ LIMIT 30;
 
 ### During Indexing
 
-![Vanta Logo](../vanta_logo.png)
+
 
 ### After Entity Merge
 
 When two entities are merged:
 
-![Vanta Logo](../vanta_logo.png)
+
 
 ### After Entity Rename
 
 When a user renames an entity:
 
-![Vanta Logo](../vanta_logo.png)
+
 
 ---
 
@@ -215,11 +215,11 @@ When a user renames an entity:
 
 ### Query: "me and my mom"
 
-![Vanta Logo](../vanta_logo.png)
+
 
 ### Query: "me and my mom at the beach"
 
-![Vanta Logo](../vanta_logo.png)
+
 
 ---
 

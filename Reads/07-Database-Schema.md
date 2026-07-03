@@ -6,7 +6,7 @@
 
 ## Schema Overview
 
-![Vanta Logo](../vanta_logo.png)
+
 
 ---
 
@@ -264,7 +264,57 @@ CREATE VIRTUAL TABLE document_vec USING vec0(
 
 ## Schema Diagram (SQL Relationships)
 
-![Vanta Logo](../vanta_logo.png)
+```mermaid
+erDiagram
+    files ||--o{ face_detections : "has"
+    files ||--o{ document_chunks : "has"
+    files ||--o{ entity_memberships : "included in"
+    entities ||--o{ face_detections : "detected as"
+    entities ||--o{ entity_memberships : "member of"
+    entities ||--o{ entity_relation_files : "co-occurs (Entity A)"
+    entities ||--o{ entity_relation_files : "co-occurs (Entity B)"
+    files ||--o{ entity_relation_files : "contains co-occurrence"
+    
+    files ||--|| clip_vec : "has embedding (MATCH)"
+    face_detections ||--|| face_vec : "has embedding (MATCH)"
+    document_chunks ||--|| document_vec : "has embedding (MATCH)"
+    entities ||--|| person_centroids : "has centroid (MATCH)"
+
+    entities {
+        int entity_id PK
+        string display_name
+        string relation
+        float confidence
+        int sample_count
+    }
+    
+    files {
+        int id PK
+        string abs_path UK
+        string filetype
+        string status
+    }
+    
+    face_detections {
+        int id PK
+        int file_id FK
+        int entity_id FK
+        float det_score
+    }
+    
+    entity_memberships {
+        int entity_id PK, FK
+        int file_id PK, FK
+        float score
+    }
+    
+    entity_relation_files {
+        int entity_a PK, FK
+        int entity_b PK, FK
+        int file_id PK, FK
+        int co_occurrence_count
+    }
+```
 
 ---
 

@@ -8,7 +8,7 @@
 
 The ingestion pipeline is the first step in Vanta's lifecycle. It scans the Android **MediaStore** (the system index of all media), classifies files by type, and batches them into SQLite. No embeddings are generated at this stage — only metadata registration.
 
-![Vanta Logo](../vanta_logo.png)
+
 
 ---
 
@@ -18,7 +18,7 @@ The ingestion pipeline is the first step in Vanta's lifecycle. It scans the Andr
 
 Android maintains a system-wide index of all media in `MediaStore`. Vanta queries four collections:
 
-![Vanta Logo](../vanta_logo.png)
+
 
 **Per-collection projection:**
 
@@ -37,7 +37,7 @@ Android maintains a system-wide index of all media in `MediaStore`. Vanta querie
 
 Each row is classified into a `FileType` using **extension-first, MIME-fallback** logic:
 
-![Vanta Logo](../vanta_logo.png)
+
 
 **Supported extensions:**
 
@@ -73,7 +73,7 @@ data class FileMeta(
 )
 ```
 
-![Vanta Logo](../vanta_logo.png)
+
 
 ---
 
@@ -81,7 +81,7 @@ data class FileMeta(
 
 Files are collected in batches of 200 and passed to the C++ layer via JNI:
 
-![Vanta Logo](../vanta_logo.png)
+
 
 **JNI Reflection for FileMeta:**
 
@@ -99,7 +99,7 @@ jfieldID sizeBytesField = env->GetFieldID(fileMetaClass, "sizeBytes", "J");
 
 ## 5. SQLite Storage
 
-![Vanta Logo](../vanta_logo.png)
+
 
 **Key constraints:**
 
@@ -111,7 +111,7 @@ jfieldID sizeBytesField = env->GetFieldID(fileMetaClass, "sizeBytes", "J");
 
 ## State Machine
 
-![Vanta Logo](../vanta_logo.png)
+
 
 ---
 

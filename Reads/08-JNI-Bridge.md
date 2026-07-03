@@ -8,7 +8,7 @@
 
 Vanta uses **JNI (Java Native Interface)** to bridge the React Native / Kotlin layer with the C++ ML engine. The bridge is implemented in `vanta.cpp` and exposed through the `VantaEngineModule` Kotlin class.
 
-![Vanta Logo](../vanta_logo.png)
+
 
 ---
 
@@ -16,7 +16,7 @@ Vanta uses **JNI (Java Native Interface)** to bridge the React Native / Kotlin l
 
 JNI methods are registered via **dynamic registration** (not `javah` stubs). This is more robust and avoids name mangling issues.
 
-![Vanta Logo](../vanta_logo.png)
+
 
 ```cpp
 // vanta.cpp
@@ -36,7 +36,7 @@ JNIEXPORT jint JNICALL JNI_OnLoad(JavaVM* vm, void* reserved) {
 
 ## Native Method Table
 
-![Vanta Logo](../vanta_logo.png)
+
 
 ---
 
@@ -70,7 +70,7 @@ JNIEXPORT jint JNICALL JNI_OnLoad(JavaVM* vm, void* reserved) {
 
 ## FileMeta Array Conversion (Detailed)
 
-![Vanta Logo](../vanta_logo.png)
+
 
 **C++ struct:**
 ```cpp
@@ -156,7 +156,7 @@ All complex return types are serialized as JSON strings:
 
 ## Thread Safety
 
-![Vanta Logo](../vanta_logo.png)
+
 
 **Rules:**
 1. `g_session_mutex` is acquired only for **model load/unload** operations
@@ -181,7 +181,7 @@ All complex return types are serialized as JSON strings:
 
 ## Memory Management
 
-![Vanta Logo](../vanta_logo.png)
+
 
 **Critical JNI rules:**
 - `GetStringUTFChars` → must `ReleaseStringUTFChars`
@@ -193,7 +193,7 @@ All complex return types are serialized as JSON strings:
 
 ## Lifecycle
 
-![Vanta Logo](../vanta_logo.png)
+
 
 ---
 
