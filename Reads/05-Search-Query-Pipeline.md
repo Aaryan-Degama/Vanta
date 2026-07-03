@@ -14,7 +14,7 @@ The search pipeline is a **hybrid AI + graph system**. It combines:
 4. **CLIP Re-ranking** — scores candidates by visual-semantic similarity
 5. **Typo Correction** — fixes spelling errors before NER runs
 
-![Vanta Logo](../vanta_logo.png)
+![Query Pipeline](./assets/Query_pipeline.png)
 
 ---
 
@@ -22,7 +22,7 @@ The search pipeline is a **hybrid AI + graph system**. It combines:
 
 Before NER runs, the query is spell-checked using **SymSpell** (Symmetric Delete spelling correction algorithm).
 
-![Vanta Logo](../vanta_logo.png)
+
 
 **Whitelist sources:**
 - Static terms: `me`, `myself`, `mom`, `dad`, `beach`, `mountain`, `graduation`, ...
@@ -37,7 +37,7 @@ Before NER runs, the query is spell-checked using **SymSpell** (Symmetric Delete
 
 ### Model
 
-![Vanta Logo](../vanta_logo.png)
+
 
 **Label map:**
 ```json
@@ -66,7 +66,7 @@ Before NER runs, the query is spell-checked using **SymSpell** (Symmetric Delete
 
 Each span is mapped to a concrete `entity_id` in the database.
 
-![Vanta Logo](../vanta_logo.png)
+
 
 ### Resolution Algorithm
 
@@ -100,7 +100,7 @@ int64_t resolve_span_to_entity_id(
 
 When NER returns zero spans (e.g., misspelled name not caught by SymSpell), the engine falls back to **word-by-word entity matching** against the known entity dictionary.
 
-![Vanta Logo](../vanta_logo.png)
+
 
 ---
 
@@ -108,7 +108,7 @@ When NER returns zero spans (e.g., misspelled name not caught by SymSpell), the 
 
 Based on resolved entity IDs, the engine builds a candidate file set:
 
-![Vanta Logo](../vanta_logo.png)
+
 
 **Multi-entity intersection (3+ entities):**
 1. Query `entity_memberships` for each entity individually
@@ -122,7 +122,7 @@ Based on resolved entity IDs, the engine builds a candidate file set:
 
 Unresolved text (visual context) is converted to a CLIP-friendly caption:
 
-![Vanta Logo](../vanta_logo.png)
+
 
 **Intent Builder mappings (examples):**
 
@@ -147,11 +147,11 @@ If no mapping exists, the raw text is used as the caption.
 
 ### Scenario A: Visual Context Present (CLIP Ranking)
 
-![Vanta Logo](../vanta_logo.png)
+
 
 ### Scenario B: People Only (Graph Ranking)
 
-![Vanta Logo](../vanta_logo.png)
+
 
 **Combined score rationale:** A photo of "me and my mom" is only as good as its worst face match. If mom is blurry and far away, the photo shouldn't rank highly even if I'm perfectly in focus.
 
@@ -161,7 +161,7 @@ If no mapping exists, the raw text is used as the caption.
 
 Before returning a result, the engine verifies that every required entity actually has a face detection in that specific file:
 
-![Vanta Logo](../vanta_logo.png)
+
 
 This prevents false positives from `entity_memberships` stale data.
 
@@ -171,17 +171,21 @@ This prevents false positives from `entity_memberships` stale data.
 
 Consecutive photos taken within 30 seconds are considered "burst shots" and only the best one is kept:
 
-![Vanta Logo](../vanta_logo.png)
+
 
 ---
 
 ## Complete Search Flow Diagram
 
-![Vanta Logo](../vanta_logo.png)
+![Query Pipeline Revised](./assets/query_pipeline_revised.png)
 
 ---
 
 ## Query Examples & Pipeline Behavior
+
+![Search Example 1](./assets/search_example1.jpg)
+![Search Example 2](./assets/search_example2.jpg)
+![Search Example 3](./assets/seach_example_3.jpg)
 
 | Query | NER Spans | Resolved Entities | CLIP Caption | Candidate Source | Ranking |
 |-------|-----------|-------------------|--------------|----------------|---------|
@@ -205,5 +209,5 @@ Consecutive photos taken within 30 seconds are considered "burst shots" and only
 | CLIP text embedding | ~30-60 ms | ONNX Runtime |
 | Image embedding lookup | ~1-5 ms | sqlite-vec KNN |
 | Dot product ranking | ~1-5 ms | Pure C++ math |
-| **Total (typical)** | **~60-150 ms** | End-to-end |
-| **Total (global KNN)** | **~30-80 ms** | No graph traversal |
+| **Total (Average)** | **~280 ms** | End-to-end across all prompt types (long/short, entity/relation, intent builder, spell check) |
+| **Total (Maximum)** | **~430-450 ms** | Rare edge cases |

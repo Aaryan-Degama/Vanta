@@ -1,4 +1,4 @@
-# Vanta
+# <img src="./Reads/assets/logo.png" alt="Vanta Logo" height="60" align="absmiddle" style="background-color: white; padding: 5px; border-radius: 10px; margin-right: 10px;" /> <span style="font-size: 1.5em;margin-left: 10px;">Vanta</span>
 
 > **An on-device, privacy-first intelligent photo gallery with natural-language search, face recognition, and relational graph queries.**
 
@@ -14,6 +14,7 @@ Vanta is a React Native Android application that indexes your local media using 
 - **On-Device Everything** — All models run locally via ONNX Runtime. No network required. No data leaves your phone.
 - **Semantic Image Search** — CLIP embeddings understand visual concepts beyond just tags.
 - **Document Indexing** — PDFs, Word docs, and text files are chunked and embedded for full-text semantic search.
+- **Blazing Fast Performance** — Average end-to-end search latency of ~280ms across all query combinations (long/short, entity/relation, intent builder, and spell-checking), with rare peaks of ~430ms-450ms.
 
 ---
 
@@ -123,7 +124,7 @@ The app needs media read permissions to scan your gallery. Grant when prompted.
 
 ## How It Works (High-Level)
 
-![Vanta Logo](vanta_logo.png)
+![System Architecture](./Reads/assets/app_system.png)
 
 ---
 

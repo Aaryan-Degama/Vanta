@@ -13,13 +13,13 @@ The indexing pipeline runs as an **Android Foreground Service** (`IndexingServic
 3. **Face clusters** — grouped into person entities via online clustering
 4. **Graph edges** — co-occurrence relationships between people in the same photo
 
-![Vanta Logo](../vanta_logo.png)
+![Indexing Pipeline](./assets/indexing_pipeline.png)
 
 ---
 
 ## Step 1: Batch Loading
 
-![Vanta Logo](../vanta_logo.png)
+
 
 **Image preprocessing:**
 - Load via `cv::imread(abs_path)`
@@ -30,7 +30,7 @@ The indexing pipeline runs as an **Android Foreground Service** (`IndexingServic
 
 ## Step 2: CLIP Image Embedding
 
-![Vanta Logo](../vanta_logo.png)
+
 
 **Model:** `clip_image_fp16.onnx` (OpenAI CLIP ViT-B/32, quantized to FP16)
 
@@ -47,7 +47,7 @@ CREATE VIRTUAL TABLE clip_vec USING vec0(
 
 ## Step 3: Face Detection
 
-![Vanta Logo](../vanta_logo.png)
+
 
 **Detection model variants:**
 
@@ -69,7 +69,7 @@ struct FaceResult {
 
 ## Step 4: Face Alignment & Embedding
 
-![Vanta Logo](../vanta_logo.png)
+
 
 **Standard 5-point landmarks:**
 ```cpp
@@ -93,7 +93,7 @@ float kTargetLandmarks[5][2] = {
 
 ## Step 5: Online Face Clustering
 
-![Vanta Logo](../vanta_logo.png)
+![Face Segregation](./assets/Face_segregation_pipeline.png)
 
 **Clustering algorithm:** Online single-pass with incremental centroid update
 
@@ -112,7 +112,7 @@ new_centroid = (old_centroid * sample_count + new_embedding) / (sample_count + 1
 
 After clustering, Vanta builds co-occurrence edges for every file with 2+ faces:
 
-![Vanta Logo](../vanta_logo.png)
+
 
 **Graph edge schema:**
 ```sql
@@ -134,7 +134,7 @@ CREATE TABLE entity_relation_files (
 
 After all files are indexed, two cleanup passes run:
 
-![Vanta Logo](../vanta_logo.png)
+
 
 ---
 
@@ -151,13 +151,13 @@ static std::string g_index_status = "idle";  // idle | loading_models | processi
 
 JavaScript polls `getIndexProgress()` to show a progress bar.
 
-![Vanta Logo](../vanta_logo.png)
+
 
 ---
 
 ## Pause & Resume
 
-![Vanta Logo](../vanta_logo.png)
+
 
 > **Implementation:** `g_pause_embedding` is an `std::atomic<bool>`. The indexing loop checks it between batches.
 

@@ -7,6 +7,7 @@
 #include <cmath>
 #include <sstream>
 #include <unordered_set>
+#include <chrono>
 #include <android/log.h>
 
 #define SQLITE_CORE 1
@@ -358,6 +359,8 @@ std::vector<search_result> search_images(
     int top_k) {
 
     std::vector<search_result> results;
+    
+    auto start_time = std::chrono::high_resolution_clock::now();
 
     if (!clip_session || !clip_session->is_loaded()) {
         LOGE("CLIP session not loaded for text search.");
@@ -613,7 +616,9 @@ std::vector<search_result> search_images(
         LOGI("Candidate set: %zu file_ids", candidate_file_ids.size());
 
         if (!has_candidates && !resolved_entity_ids.empty()) {
-            LOGI("Resolved %zu entities, but intersection is empty. Returning 0 results.", resolved_entity_ids.size());
+            auto end_time = std::chrono::high_resolution_clock::now();
+            auto duration_ms = std::chrono::duration_cast<std::chrono::milliseconds>(end_time - start_time).count();
+            LOGI("Resolved %zu entities, but intersection is empty. Returning 0 results in %lld ms.", resolved_entity_ids.size(), (long long)duration_ms);
             return results;
         }
     }
@@ -879,7 +884,9 @@ std::vector<search_result> search_images(
         }
     }
 
-    LOGI("Search complete: %zu results", results.size());
+    auto end_time = std::chrono::high_resolution_clock::now();
+    auto duration_ms = std::chrono::duration_cast<std::chrono::milliseconds>(end_time - start_time).count();
+    LOGI("Search complete: %zu results in %lld ms", results.size(), (long long)duration_ms);
     sqlite3_close(db);
     return results;
 }

@@ -6,19 +6,19 @@
 
 ## Component Map
 
-![Vanta Logo](../vanta_logo.png)
+![System Architecture](./assets/app_system.png)
 
 ---
 
 ## Data Flow — Indexing
 
-![Vanta Logo](../vanta_logo.png)
+![Indexing Pipeline](./assets/indexing_pipeline.png)
 
 ---
 
 ## Data Flow — Search
 
-![Vanta Logo](../vanta_logo.png)
+![Search Pipeline](./assets/query_pipeline_revised.png)
 
 ---
 
@@ -36,7 +36,7 @@
 
 ## Threading Model
 
-![Vanta Logo](../vanta_logo.png)
+
 
 > **Rule:** `g_session_mutex` guards model loading. Inference (read-only) is thread-safe and does not need the mutex.
 
@@ -44,4 +44,4 @@
 
 ## Memory Model
 
-![Vanta Logo](../vanta_logo.png)
+

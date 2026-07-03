@@ -8,7 +8,7 @@
 
 The face pipeline transforms raw photos into **named, searchable person entities**. It runs inside the indexing loop, immediately after CLIP embedding generation.
 
-![Vanta Logo](../vanta_logo.png)
+![Face Segregation Pipeline](./assets/Face_segregation_pipeline.png)
 
 ---
 
@@ -16,7 +16,7 @@ The face pipeline transforms raw photos into **named, searchable person entities
 
 ### Model Architecture
 
-![Vanta Logo](../vanta_logo.png)
+
 
 ### Detection Output
 
@@ -37,7 +37,7 @@ struct FaceResult {
 
 ### Detection Preprocessing
 
-![Vanta Logo](../vanta_logo.png)
+
 
 ---
 
@@ -45,7 +45,7 @@ struct FaceResult {
 
 Alignment is critical for recognition accuracy. ArcFace uses 5-point similarity transform to warp faces to a canonical 112×112 frame.
 
-![Vanta Logo](../vanta_logo.png)
+
 
 **Why alignment matters:**
 - Removes pose variation (tilt, rotation, scale)
@@ -57,7 +57,7 @@ Alignment is critical for recognition accuracy. ArcFace uses 5-point similarity 
 
 ## 3. Face Embedding
 
-![Vanta Logo](../vanta_logo.png)
+
 
 **Model variants:**
 
@@ -86,7 +86,7 @@ After normalization, the dot product of two embeddings equals their **cosine sim
 
 ### Algorithm
 
-![Vanta Logo](../vanta_logo.png)
+
 
 ### Why Incremental Centroids?
 
@@ -105,7 +105,7 @@ C_new = α × E + (1 - α) × C_old    where α = 0.1
 
 ## 5. Entity Lifecycle
 
-![Vanta Logo](../vanta_logo.png)
+![Peoples Screen](./assets/Peoples_sceen.png)
 
 ### Entity Metadata
 
@@ -123,7 +123,7 @@ CREATE TABLE entities (
 
 ### Setting Metadata (from UI)
 
-![Vanta Logo](../vanta_logo.png)
+![Setting Metadata](./assets/faceDetail1.jpg)
 
 ---
 
@@ -131,7 +131,7 @@ CREATE TABLE entities (
 
 The People page shows one representative face per entity. Selection criteria:
 
-![Vanta Logo](../vanta_logo.png)
+![Avatar Selection](./assets/faceDetail2.jpg)
 
 **Current limitation:** The avatar is cropped from the original image using the bounding box. For Samsung-quality avatars, use the **pre-aligned 112×112 crop** instead.
 
@@ -141,7 +141,7 @@ The People page shows one representative face per entity. Selection criteria:
 
 For better avatar quality, compute a composite quality score during indexing:
 
-![Vanta Logo](../vanta_logo.png)
+
 
 **Formula:**
 ```
@@ -160,10 +160,10 @@ Some faces fail to match during online clustering (e.g., first photo of a person
 
 Over time, the same person may split into multiple clusters. The merge pass compares all entity centroids pairwise:
 
-![Vanta Logo](../vanta_logo.png)
+
 
 ---
 
 ## 9. Database Schema for Face Data
 
-![Vanta Logo](../vanta_logo.png)
+
