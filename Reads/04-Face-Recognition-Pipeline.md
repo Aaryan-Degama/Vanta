@@ -162,8 +162,5 @@ Over time, the same person may split into multiple clusters. The merge pass comp
 
 
 
----
-
-## 9. Database Schema for Face Data
 
 
