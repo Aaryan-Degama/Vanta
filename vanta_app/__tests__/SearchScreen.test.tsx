@@ -41,4 +41,27 @@ describe('SearchScreen', () => {
     await fireEvent.changeText(input, '');
     expect(result.getByText('Search your photos')).toBeTruthy();
   });
+
+  it('long-press selects results and shares exactly the selected ones', async () => {
+    const result = await render(
+      <ThemeProvider>
+        <SearchScreen />
+      </ThemeProvider>
+    );
+    const input = result.getByPlaceholderText('<Query>');
+    await fireEvent.changeText(input, 'beach');
+    await fireEvent(input, 'submitEditing');
+
+    // Long-press enters selection; a tap then toggles instead of opening the viewer.
+    await fireEvent(await result.findByTestId('result-1'), 'longPress');
+    expect(result.getByText('1 selected')).toBeTruthy();
+    await fireEvent.press(result.getByTestId('result-0'));
+    await fireEvent.press(result.getByTestId('result-0'));
+    expect(result.getByText('1 selected')).toBeTruthy();
+
+    await fireEvent.press(result.getByLabelText('Share'));
+    expect(bridge.shareFiles).toHaveBeenCalledWith(['/mock/photo2.jpg']);
+    // A successful share leaves selection mode.
+    expect(await result.findByText('2 Results')).toBeTruthy();
+  });
 });

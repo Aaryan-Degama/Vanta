@@ -8,7 +8,11 @@
 package expo.modules.vantaengine
 
 // Android Context and logging used throughout the module.
+import android.content.ContentUris
 import android.content.Context
+import android.content.Intent
+import android.net.Uri
+import android.provider.MediaStore
 import android.content.SharedPreferences
 import android.util.Log
 
@@ -212,7 +216,10 @@ class VantaEngineModule : Module() {
             val context = appContext.reactContext
                 ?: throw IllegalStateException("Android context unavailable")
 
-            extractAssetsIfNeeded(context)
+            // Off the startup thread: the first launch copies ~400 MB and would
+            // freeze the app (ANR). Search, indexing and re-scan each call
+            // extractAssetsIfNeeded themselves and wait on the same lock.
+            Thread { extractAssetsIfNeeded(context) }.start()
             setModelsDirNative(VantaEngineConfig.getModelsDirectory(context))
             setCropsDirNative(VantaEngineConfig.getCropsDirectory(context))
 
@@ -447,6 +454,12 @@ class VantaEngineModule : Module() {
             setSearchOptionsNative(useGraph, useSpellCheck, useIntent)
         }
 
+        // Opens the system share sheet for the given absolute file paths.
+        AsyncFunction("shareFiles") { paths: List<String> -> sendFiles(paths, view = false) }
+
+        // Opens one file in the device's default viewer/player.
+        AsyncFunction("openFile") { path: String -> sendFiles(listOf(path), view = true) }
+
         AsyncFunction("resetFaceData") { promise: Promise ->
             val context = appContext.reactContext
             if (context == null) {
@@ -477,6 +490,58 @@ class VantaEngineModule : Module() {
                     promise.reject("ERR", e.message, e)
                 }
             }.start()
+        }
+    }
+
+    /**
+     * Maps an absolute path to its MediaStore content URI. Other apps cannot
+     * read file:// paths, so anything handed to them must be a content URI.
+     */
+    private fun mediaUriForPath(context: Context, path: String): Uri? {
+        val base = MediaStore.Files.getContentUri("external")
+        return context.contentResolver.query(
+            base,
+            arrayOf(MediaStore.MediaColumns._ID),
+            "${MediaStore.MediaColumns.DATA} = ?",
+            arrayOf(path),
+            null
+        )?.use { if (it.moveToFirst()) ContentUris.withAppendedId(base, it.getLong(0)) else null }
+    }
+
+    /**
+     * Shares [paths] through the system chooser, or opens the first one in its
+     * default app when [view] is set. Returns false when none of the files is
+     * known to MediaStore or no app can handle them.
+     */
+    private fun sendFiles(paths: List<String>, view: Boolean): Boolean {
+        val context = appContext.reactContext
+            ?: throw IllegalStateException("Android context unavailable")
+
+        val uris = ArrayList(paths.mapNotNull { mediaUriForPath(context, it) })
+        if (uris.isEmpty()) return false
+
+        // Exact MIME type if all files agree, else "image/*" / "video/*", else "*/*".
+        val types = uris.map { context.contentResolver.getType(it) ?: "*/*" }
+        val mime = types.distinct().singleOrNull()
+            ?: types.map { it.substringBefore('/') }.distinct().singleOrNull()?.let { "$it/*" }
+            ?: "*/*"
+
+        val intent = when {
+            view -> Intent(Intent.ACTION_VIEW).setDataAndType(uris[0], mime)
+            uris.size == 1 -> Intent(Intent.ACTION_SEND).setType(mime)
+                .putExtra(Intent.EXTRA_STREAM, uris[0])
+            else -> Intent(Intent.ACTION_SEND_MULTIPLE).setType(mime)
+                .putParcelableArrayListExtra(Intent.EXTRA_STREAM, uris)
+        }.addFlags(Intent.FLAG_GRANT_READ_URI_PERMISSION)
+
+        val launch = if (view) intent else Intent.createChooser(intent, null)
+        return try {
+            appContext.currentActivity?.startActivity(launch)
+                ?: context.startActivity(launch.addFlags(Intent.FLAG_ACTIVITY_NEW_TASK))
+            true
+        } catch (e: android.content.ActivityNotFoundException) {
+            Log.w("VantaEngine", "No app can handle $mime", e)
+            false
         }
     }
 

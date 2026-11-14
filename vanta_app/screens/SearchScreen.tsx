@@ -11,6 +11,8 @@ import {
   ActivityIndicator,
   Animated,
   Keyboard,
+  Pressable,
+  BackHandler,
 } from 'react-native';
 import { useTheme } from '../ThemeContext';
 import { useNavigation, NavigationProp } from '@react-navigation/native';
@@ -18,6 +20,7 @@ import { Ionicons } from '@expo/vector-icons';
 import type { RootStackParamList } from '../App';
 import { searchImages } from '../modules/vanta-bridge';
 import { useVantaError } from '../hooks/useVantaError';
+import { MediaViewer, isVideo, share } from '../MediaViewer';
 
 /**
  * Shape of a single search result returned by the native engine.
@@ -26,8 +29,8 @@ interface SearchResultItem {
   abs_path: string;
   file_type?: string;
   display_name?: string;
-  size?: number;
-  date_taken?: number;
+  size_bytes?: number;
+  mtime_unix?: number;
 }
 
 /**
@@ -35,15 +38,23 @@ interface SearchResultItem {
  *
  * `item` is the current search result. `index` is used to compute a diagonal
  * stagger delay so the grid animates in a wave. `colors` comes from the theme.
+ * Tap and long-press are reported to the parent, which decides between
+ * opening the viewer and toggling selection.
  */
 const StaggeredResultItem = ({
   item,
   index,
   colors,
+  selected,
+  onPress,
+  onLongPress,
 }: {
   item: SearchResultItem;
   index: number;
   colors: ReturnType<typeof useTheme>['colors'];
+  selected: boolean;
+  onPress: () => void;
+  onLongPress: () => void;
 }) => {
   const [displayItem, setDisplayItem] = useState<SearchResultItem>(item);
   const rotateAnim = useRef(new Animated.Value(0)).current;
@@ -93,24 +104,44 @@ const StaggeredResultItem = ({
         transform: [{ scaleY: -1 }, { rotateY }, { rotateX }],
       }}
     >
-      {displayItem?.abs_path ? (
-        <Image
-          source={{ uri: 'file://' + displayItem.abs_path }}
-          style={{ width: '100%', height: '100%' }}
-        />
-      ) : (
-        <View
-          style={{
-            width: '100%',
-            height: '100%',
-            backgroundColor: colors.chipBackground,
-            justifyContent: 'center',
-            alignItems: 'center',
-          }}
-        >
-          <Ionicons name="image-outline" size={24} color={colors.text} />
-        </View>
-      )}
+      <Pressable
+        testID={`result-${index}`}
+        style={{ flex: 1 }}
+        onPress={onPress}
+        onLongPress={onLongPress}
+      >
+        {displayItem?.abs_path ? (
+          <>
+            <Image
+              source={{ uri: 'file://' + displayItem.abs_path }}
+              style={{ width: '100%', height: '100%', opacity: selected ? 0.5 : 1 }}
+            />
+            {isVideo(displayItem.abs_path) && (
+              <Ionicons name="play-circle" size={22} color="#ffffff" style={styles.cellBadgeLeft} />
+            )}
+            {selected && (
+              <Ionicons
+                name="checkmark-circle"
+                size={24}
+                color={colors.primary}
+                style={styles.cellBadgeRight}
+              />
+            )}
+          </>
+        ) : (
+          <View
+            style={{
+              width: '100%',
+              height: '100%',
+              backgroundColor: colors.chipBackground,
+              justifyContent: 'center',
+              alignItems: 'center',
+            }}
+          >
+            <Ionicons name="image-outline" size={24} color={colors.text} />
+          </View>
+        )}
+      </Pressable>
     </Animated.View>
   );
 };
@@ -131,6 +162,37 @@ export default function SearchScreen() {
   const [hasSearched, setHasSearched] = useState(false);
   // Ref to the results scroll view so we can scroll to top on new searches.
   const scrollViewRef = useRef<ScrollView | null>(null);
+
+  // Gallery-style selection: long-press a photo to start selecting, then tap
+  // to toggle. Keyed by abs_path. While nothing is selected, a tap opens the
+  // full-screen viewer at that photo.
+  const [selected, setSelected] = useState<Set<string>>(new Set());
+  const [viewerIndex, setViewerIndex] = useState<number | null>(null);
+  const selecting = selected.size > 0;
+  const clearSelection = () => setSelected(new Set());
+
+  const toggleSelected = (path: string) =>
+    setSelected((prev) => {
+      const next = new Set(prev);
+      if (!next.delete(path)) next.add(path);
+      return next;
+    });
+
+  // Android back button leaves selection mode instead of leaving the app.
+  React.useEffect(() => {
+    if (!selecting) return;
+    const sub = BackHandler.addEventListener('hardwareBackPress', () => {
+      clearSelection();
+      return true;
+    });
+    return () => sub.remove();
+  }, [selecting]);
+
+  const handleShare = async () => {
+    // Share in the order shown, not the order tapped.
+    const paths = results.map((r) => r.abs_path).filter((p) => selected.has(p));
+    if (await share(paths)) clearSelection();
+  };
 
   const handleError = useVantaError('Search failed');
 
@@ -179,6 +241,7 @@ export default function SearchScreen() {
     // Jump back to the bottom (origin) for the new search
     scrollViewRef.current?.scrollTo({ y: 0, animated: true });
 
+    clearSelection();
     setIsSearching(true);
     try {
       const jsonRes = await searchImages(searchQuery);
@@ -202,35 +265,53 @@ export default function SearchScreen() {
         <View style={{ width: 90, alignItems: 'flex-start' }}>
           {(results.length > 0 || isSearching || hasSearched) && (
             <TouchableOpacity
+              accessibilityLabel={selecting ? 'Cancel selection' : 'Clear search'}
               style={[styles.iconButton, { backgroundColor: 'rgba(0,0,0,0.6)' }]}
               onPress={() => {
+                if (selecting) return clearSelection();
                 setSearchQuery('');
                 setResults([]);
                 setHasSearched(false);
               }}
             >
-              <Ionicons name="chevron-back" size={24} color="#ffffff" />
+              <Ionicons name={selecting ? 'close' : 'chevron-back'} size={24} color="#ffffff" />
             </TouchableOpacity>
           )}
         </View>
 
         <Text style={{ color: '#ffffff', fontSize: 20, fontWeight: 'bold' }}>
-          {results.length > 0 ? `${results.length} Results` : 'Search'}
+          {selecting
+            ? `${selected.size} selected`
+            : results.length > 0
+              ? `${results.length} Results`
+              : 'Search'}
         </Text>
 
         <View style={{ width: 90, flexDirection: 'row', justifyContent: 'flex-end' }}>
-          <TouchableOpacity
-            style={[styles.iconButton, { backgroundColor: 'rgba(0,0,0,0.6)', marginRight: 10 }]}
-            onPress={() => navigation.navigate('People')}
-          >
-            <Ionicons name="people" size={20} color="#ffffff" />
-          </TouchableOpacity>
-          <TouchableOpacity
-            style={[styles.iconButton, { backgroundColor: 'rgba(0,0,0,0.6)' }]}
-            onPress={() => navigation.navigate('Settings')}
-          >
-            <Ionicons name="settings-sharp" size={20} color="#ffffff" />
-          </TouchableOpacity>
+          {selecting ? (
+            <TouchableOpacity
+              accessibilityLabel="Share"
+              style={[styles.iconButton, { backgroundColor: 'rgba(0,0,0,0.6)' }]}
+              onPress={handleShare}
+            >
+              <Ionicons name="share-social" size={20} color="#ffffff" />
+            </TouchableOpacity>
+          ) : (
+            <>
+              <TouchableOpacity
+                style={[styles.iconButton, { backgroundColor: 'rgba(0,0,0,0.6)', marginRight: 10 }]}
+                onPress={() => navigation.navigate('People')}
+              >
+                <Ionicons name="people" size={20} color="#ffffff" />
+              </TouchableOpacity>
+              <TouchableOpacity
+                style={[styles.iconButton, { backgroundColor: 'rgba(0,0,0,0.6)' }]}
+                onPress={() => navigation.navigate('Settings')}
+              >
+                <Ionicons name="settings-sharp" size={20} color="#ffffff" />
+              </TouchableOpacity>
+            </>
+          )}
         </View>
       </View>
 
@@ -274,7 +355,17 @@ export default function SearchScreen() {
           ) : (
             <View style={{ flexDirection: 'row', flexWrap: 'wrap' }}>
               {results.map((item, index) => (
-                <StaggeredResultItem key={index} item={item} index={index} colors={colors} />
+                <StaggeredResultItem
+                  key={index}
+                  item={item}
+                  index={index}
+                  colors={colors}
+                  selected={selected.has(item.abs_path)}
+                  onPress={() =>
+                    selecting ? toggleSelected(item.abs_path) : setViewerIndex(index)
+                  }
+                  onLongPress={() => toggleSelected(item.abs_path)}
+                />
               ))}
             </View>
           )}
@@ -333,6 +424,12 @@ export default function SearchScreen() {
           />
         </View>
       </Animated.View>
+
+      <MediaViewer
+        paths={results.map((r) => r.abs_path)}
+        index={viewerIndex}
+        onClose={() => setViewerIndex(null)}
+      />
     </View>
   );
 }
@@ -377,6 +474,8 @@ const styles = StyleSheet.create({
   searchIcon: {
     marginRight: 10,
   },
+  cellBadgeLeft: { position: 'absolute', left: 4, bottom: 4 },
+  cellBadgeRight: { position: 'absolute', right: 4, top: 4 },
   searchInput: {
     flex: 1,
     fontSize: 15,

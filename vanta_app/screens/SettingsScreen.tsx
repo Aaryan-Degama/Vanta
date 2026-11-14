@@ -260,19 +260,15 @@ export default function SettingsScreen() {
 
     if (Platform.OS === 'android') {
       try {
-        const permissions = await PermissionsAndroid.requestMultiple([
-          PermissionsAndroid.PERMISSIONS.READ_MEDIA_IMAGES,
-          PermissionsAndroid.PERMISSIONS.READ_MEDIA_VIDEO,
-          PermissionsAndroid.PERMISSIONS.READ_MEDIA_AUDIO,
-        ]);
-        if (
-          permissions[PermissionsAndroid.PERMISSIONS.READ_MEDIA_IMAGES] !==
-            PermissionsAndroid.RESULTS.GRANTED &&
-          permissions[PermissionsAndroid.PERMISSIONS.READ_MEDIA_VIDEO] !==
-            PermissionsAndroid.RESULTS.GRANTED &&
-          permissions[PermissionsAndroid.PERMISSIONS.READ_MEDIA_AUDIO] !==
-            PermissionsAndroid.RESULTS.GRANTED
-        ) {
+        // READ_MEDIA_* only exist on Android 13+ (API 33); older versions
+        // gate the media library behind READ_EXTERNAL_STORAGE.
+        const P = PermissionsAndroid.PERMISSIONS;
+        const permissions = await PermissionsAndroid.requestMultiple(
+          Number(Platform.Version) >= 33
+            ? [P.READ_MEDIA_IMAGES, P.READ_MEDIA_VIDEO, P.READ_MEDIA_AUDIO]
+            : [P.READ_EXTERNAL_STORAGE]
+        );
+        if (!Object.values(permissions).includes(PermissionsAndroid.RESULTS.GRANTED)) {
           console.warn('Permissions not granted');
         }
       } catch (err) {

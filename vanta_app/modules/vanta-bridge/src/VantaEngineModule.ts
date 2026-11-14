@@ -73,6 +73,12 @@ declare class VantaEngineModule extends NativeModule<Record<string, never>> {
   // Returns the current owner entity ID (-1 if not set).
   getOwnerEntityId(): Promise<number>;
 
+  // Opens the system share sheet for the given absolute file paths.
+  shareFiles(paths: string[]): Promise<boolean>;
+
+  // Opens one file in the device's default viewer/player.
+  openFile(path: string): Promise<boolean>;
+
   // Resets all face data and re-runs face pipeline with updated thresholds.
   resetFaceData(): Promise<boolean>;
 }

@@ -85,3 +85,9 @@ export async function searchImages(query: string): Promise<string> {
 export const setSearchOptions = jest.fn(
   async (_useGraph: boolean, _useSpellCheck: boolean, _useIntent: boolean): Promise<void> => {}
 );
+
+/** Records share requests so tests can assert on them. */
+export const shareFiles = jest.fn(async (_paths: string[]): Promise<boolean> => true);
+
+/** Records open-in-default-app requests. */
+export const openFile = jest.fn(async (_path: string): Promise<boolean> => true);

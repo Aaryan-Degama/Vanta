@@ -80,3 +80,18 @@ export async function searchImages(query: string): Promise<string> {
 export async function setSearchOptions(useGraph: boolean, useSpellCheck: boolean, useIntent: boolean): Promise<void> {
   return await VantaEngineModule.setSearchOptions(useGraph, useSpellCheck, useIntent);
 }
+
+/**
+ * Opens the system share sheet for the given absolute file paths.
+ * Resolves false if none of the files could be shared.
+ */
+export async function shareFiles(paths: string[]): Promise<boolean> {
+  return await VantaEngineModule.shareFiles(paths);
+}
+
+/**
+ * Opens one file (used for videos) in the device's default viewer/player.
+ */
+export async function openFile(path: string): Promise<boolean> {
+  return await VantaEngineModule.openFile(path);
+}

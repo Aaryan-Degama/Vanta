@@ -24,6 +24,7 @@ import { useTheme } from '../ThemeContext';
 import { LinearGradient } from 'expo-linear-gradient';
 import { BlurView } from 'expo-blur';
 import { Ionicons } from '@expo/vector-icons';
+import { MediaViewer } from '../MediaViewer';
 
 const { width } = Dimensions.get('window');
 
@@ -105,6 +106,7 @@ export const EntityDetailScreen = ({ route }: { route?: RouteProps }) => {
   const [loading, setLoading] = useState(true);
   const [ownerEntityId, setOwnerEntityId] = useState<number>(-1);
   const [bestCrop, setBestCrop] = useState<FaceCrop | null>(null);
+  const [viewerIndex, setViewerIndex] = useState<number | null>(null);
 
   // Metadata
   const [relation, setRelation] = useState('');
@@ -201,14 +203,14 @@ export const EntityDetailScreen = ({ route }: { route?: RouteProps }) => {
     }
   };
 
-  const renderFileItem = ({ item }: { item: EntityFile }) => (
-    <View style={styles.photoContainer}>
+  const renderFileItem = ({ item, index }: { item: EntityFile; index: number }) => (
+    <Pressable style={styles.photoContainer} onPress={() => setViewerIndex(index)}>
       <Image
         source={{ uri: `file://${item.abs_path}` }}
         style={styles.photoItem}
         resizeMode="cover"
       />
-    </View>
+    </Pressable>
   );
 
   const displayName = currentName && currentName.trim() !== '' ? currentName : 'Unnamed';
@@ -393,6 +395,12 @@ export const EntityDetailScreen = ({ route }: { route?: RouteProps }) => {
           </View>
         </Modal>
       </ScrollView>
+
+      <MediaViewer
+        paths={files.map((f) => f.abs_path)}
+        index={viewerIndex}
+        onClose={() => setViewerIndex(null)}
+      />
     </View>
   );
 };
