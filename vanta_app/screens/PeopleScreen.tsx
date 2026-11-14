@@ -1,5 +1,6 @@
 import React, { useEffect, useState } from 'react';
 import {
+  Alert,
   View,
   Text,
   FlatList,
@@ -168,16 +169,37 @@ export const PeopleScreen = () => {
 
   const handleRescan = async () => {
     setResetting(true);
+    let completed = false;
     try {
       console.log('Starting face data reset...');
-      await VantaEngine.resetFaceData();
-      console.log('Face data reset complete. Refreshing...');
+      // false: refused (indexing is running or the face model failed to load)
+      // or failed part-way. Native does not say which.
+      completed = await VantaEngine.resetFaceData();
+      console.log('Face data reset finished. Refreshing...');
       await fetchEntities();
     } catch (error) {
       console.error('Failed to reset face data:', error);
     } finally {
       setResetting(false);
     }
+    if (!completed) {
+      Alert.alert(
+        'Re-scan did not complete',
+        'If indexing is running, wait for it to finish and try again.'
+      );
+    }
+  };
+
+  // Re-scan is destructive (native wipes every entity), so require confirmation.
+  const confirmRescan = () => {
+    Alert.alert(
+      'Re-scan all faces?',
+      'All person names and groupings will be lost, and every face will be re-clustered from scratch. This cannot be undone.',
+      [
+        { text: 'Cancel', style: 'cancel' },
+        { text: 'Re-scan', style: 'destructive', onPress: handleRescan },
+      ]
+    );
   };
 
   if (loading) {
@@ -212,7 +234,7 @@ export const PeopleScreen = () => {
         <Text style={[styles.title, { color: colors.text }]}>People</Text>
         <Pressable
           style={[styles.rescanButton, { backgroundColor: '#ffffff', borderRadius: 30 }]}
-          onPress={handleRescan}
+          onPress={confirmRescan}
         >
           <Text style={[styles.rescanText, { color: '#000000', fontWeight: 'bold' }]}>Re-scan</Text>
         </Pressable>
@@ -278,36 +300,5 @@ const styles = StyleSheet.create({
     fontWeight: '500',
     textAlign: 'center',
     width: CELL_WIDTH - 12,
-  },
-  modalOverlay: {
-    flex: 1,
-    backgroundColor: 'rgba(0,0,0,0.5)',
-    justifyContent: 'center',
-    alignItems: 'center',
-  },
-  modalContent: {
-    width: 300,
-    padding: 20,
-    borderRadius: 12,
-    alignItems: 'center',
-  },
-  modalTitle: {
-    fontSize: 18,
-    fontWeight: 'bold',
-    marginBottom: 16,
-  },
-  input: {
-    width: '100%',
-    height: 44,
-    borderWidth: 1,
-    borderRadius: 8,
-    paddingHorizontal: 12,
-    marginTop: 16,
-    marginBottom: 20,
-  },
-  modalButtons: {
-    flexDirection: 'row',
-    justifyContent: 'space-between',
-    width: '100%',
   },
 });

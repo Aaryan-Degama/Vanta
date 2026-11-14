@@ -59,6 +59,10 @@ function LegendItem({
   );
 }
 
+// Number of 1-second poll ticks during which a terminal status that was never
+// preceded by an active one is treated as stale (left over from the last run).
+const STALE_STATUS_GRACE_TICKS = 3;
+
 /**
  * SettingsScreen
  * Controls application settings, dark mode preferences, and triggers the local AI indexing process.
@@ -143,14 +147,26 @@ export default function SettingsScreen() {
    * Like fetchStats, this is a function declaration so it can be referenced
    * from the status-check effect before its textual definition.
    */
-  function startPolling() {
+  function startPolling(alreadyActive = false) {
     // Clear any existing interval before starting a new one.
     if (pollIntervalRef.current) clearInterval(pollIntervalRef.current);
+    // ponytail: native sets "loading_models" only once the run starts, after
+    // the service has copied model assets, so until then a terminal status may
+    // be left over from the previous run. Ignore it for the first few ticks
+    // only; a run that really ends before we ever observe it active is still
+    // picked up afterwards. Upgrade path: reset the status when the service
+    // is started, before the asset copy.
+    let sawActive = alreadyActive;
+    let ticks = 0;
     pollIntervalRef.current = setInterval(async () => {
       try {
         const progressString = await getIndexProgress();
         if (progressString) {
           const data = JSON.parse(progressString);
+          ticks += 1;
+          const isTerminal =
+            data.status === 'finished' || data.status === 'paused' || data.status === 'failed';
+          if (isTerminal && !sawActive && ticks <= STALE_STATUS_GRACE_TICKS) return;
 
           if (data.total && data.total > 0 && data.status === 'processing') {
             let percent = Math.ceil((data.processed / data.total) * 100);
@@ -158,13 +174,22 @@ export default function SettingsScreen() {
             setIndexProgress(percent);
           }
 
-          if (data.status === 'finished' || data.status === 'paused') {
+          if (isTerminal) {
             if (pollIntervalRef.current) clearInterval(pollIntervalRef.current);
             setIsIndexing(false);
             if (data.status === 'paused') setIsPaused(true);
+            // Native reports "failed" when the database or AI models could not
+            // be loaded, on an error mid-run, or when a batch made no progress.
+            if (data.status === 'failed') {
+              Alert.alert(
+                'Indexing failed',
+                'Indexing stopped because of an error. Check the logs and try again.'
+              );
+            }
             setCurrentFile('');
             fetchStats();
           } else if (data.status === 'processing' || data.status === 'loading_models') {
+            sawActive = true;
             setIsIndexing(true);
             setIsPaused(false);
             if (data.currentFile) {
@@ -205,7 +230,7 @@ export default function SettingsScreen() {
                 return prev;
               });
             }
-            startPolling();
+            startPolling(true);
           } else if (data.status === 'paused') {
             setIsPaused(true);
           }

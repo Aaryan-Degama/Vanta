@@ -20,6 +20,8 @@ public:
     bool load(const std::string& vocab_path, const std::string& merges_path);
     std::vector<int64_t> encode(const std::string& text, int max_length = 77);
     bool is_loaded() const { return loaded_; }
+    // True if `w` (case-insensitive) is a whole-word entry in the CLIP vocabulary.
+    bool has_word(const std::string& w) const;
 
 private:
     bool loaded_ = false;

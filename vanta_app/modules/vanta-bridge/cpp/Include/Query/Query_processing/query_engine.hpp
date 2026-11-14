@@ -30,15 +30,19 @@ void set_query_options(bool use_graph, bool use_spellcheck, bool use_intent);
 // Rebuilds the query engine dictionary dynamically from the database.
 void rebuild_query_engine_dictionary(const std::string& db_path);
 
-// Corrects the query using the typo rectifier
-std::string get_corrected_query(const std::string& raw_query, const std::string& db_path = "");
+// Corrects the query using the typo rectifier. When a loaded tokenizer is given,
+// words present in its vocabulary are treated as correctly spelled.
+std::string get_corrected_query(const std::string& raw_query, const std::string& db_path = "",
+                                const CLIPTokenizer* tokenizer = nullptr);
 
 // Integer Damerau-Levenshtein distance between two strings.
 int damerau_levenshtein(const std::string& s1, const std::string& s2);
 
 // Resolves a span text (e.g. "dad", "my sister") to an entity ID by fuzzy
 // matching against display_name and relation of all person entities.
-// Returns -1 if no match within edit distance 2.
+// The allowed edit distance scales with the span length: exact match for up to
+// 4 characters, 1 for 5-7, 2 for 8 or more. Entities with neither a name nor a
+// relation are skipped. Returns -1 if nothing matches within that budget.
 int64_t resolve_span_to_entity_id(
     const std::string& span_text,
     const std::vector<EntityCandidate>& candidates,

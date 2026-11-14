@@ -7,7 +7,6 @@ import android.app.Service
 import android.content.Intent
 import android.os.Build
 import android.os.IBinder
-import android.util.Log
 import androidx.core.app.NotificationCompat
 
 class IndexingService : Service() {
@@ -28,8 +27,6 @@ class IndexingService : Service() {
 
     override fun onStartCommand(intent: Intent?, flags: Int, startId: Int): Int {
         if (intent?.action == ACTION_START) {
-            val dbPath = intent.getStringExtra("dbPath") ?: return START_NOT_STICKY
-
             createNotificationChannel()
             val notification: Notification = NotificationCompat.Builder(this, CHANNEL_ID)
                 .setContentTitle("Vanta Indexing")
@@ -48,6 +45,14 @@ class IndexingService : Service() {
                 startForeground(NOTIFICATION_ID, notification)
             }
 
+            // Checked only after startForeground: a service started through
+            // startForegroundService must go foreground before it may stop.
+            val dbPath = intent.getStringExtra("dbPath")
+            if (dbPath == null) {
+                if (indexingThread?.isAlive != true) stopForegroundAndSelf()
+                return START_NOT_STICKY
+            }
+
             if (indexingThread == null || !indexingThread!!.isAlive) {
                 indexingThread = Thread {
                     try {
@@ -60,27 +65,33 @@ class IndexingService : Service() {
                     } catch (e: Exception) {
                         e.printStackTrace()
                     } finally {
-                        if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.N) {
-                            stopForeground(STOP_FOREGROUND_REMOVE)
-                        } else {
-                            @Suppress("DEPRECATION")
-                            stopForeground(true)
-                        }
-                        stopSelf()
+                        stopForegroundAndSelf()
                     }
                 }
                 indexingThread?.start()
             }
         } else if (intent?.action == ACTION_STOP) {
-            if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.N) {
-                stopForeground(STOP_FOREGROUND_REMOVE)
-            } else {
-                @Suppress("DEPRECATION")
-                stopForeground(true)
-            }
-            stopSelf()
+            stopForegroundAndSelf()
+        } else {
+            // Null intent (only sent when restarting a sticky service, which
+            // this one is not; handled defensively) or an unknown action:
+            // there is no dbPath to work with, so do not linger.
+            if (indexingThread?.isAlive != true) stopForegroundAndSelf()
         }
-        return START_STICKY
+        // Not sticky: a restart delivers a null intent without the dbPath, and
+        // an app in the background may not re-enter the foreground on
+        // Android 12+, so a recreated service could not resume indexing anyway.
+        return START_NOT_STICKY
+    }
+
+    private fun stopForegroundAndSelf() {
+        if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.N) {
+            stopForeground(STOP_FOREGROUND_REMOVE)
+        } else {
+            @Suppress("DEPRECATION")
+            stopForeground(true)
+        }
+        stopSelf()
     }
 
     /**
@@ -100,18 +111,8 @@ class IndexingService : Service() {
         )
 
         for (fileName in filesToCopy) {
-            val file = java.io.File(modelsDir, fileName)
-            if (file.exists()) continue
-
-            try {
-                context.assets.open("VantaModels/$fileName").use { input ->
-                    java.io.FileOutputStream(file).use { output ->
-                        input.copyTo(output)
-                    }
-                }
-            } catch (e: Exception) {
-                Log.w("VantaEngine", "Failed to extract asset $fileName", e)
-            }
+            // Atomic temp-file-and-rename copy, defined in VantaEngineModule.kt.
+            extractModelAsset(context, modelsDir, fileName)
         }
     }
 

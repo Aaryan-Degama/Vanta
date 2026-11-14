@@ -225,13 +225,13 @@ export const EntityDetailScreen = ({ route }: { route?: RouteProps }) => {
         {/* HERO SECTION */}
         <View style={styles.heroContainer}>
           {headerImageUrl && (
-            <Image source={{ uri: headerImageUrl }} style={StyleSheet.absoluteFillObject} blurRadius={40} />
+            <Image source={{ uri: headerImageUrl }} style={StyleSheet.absoluteFill} blurRadius={40} />
           )}
-          <View style={[StyleSheet.absoluteFillObject, { backgroundColor: isDarkMode ? 'rgba(0,0,0,0.6)' : 'rgba(255,255,255,0.4)' }]} />
+          <View style={[StyleSheet.absoluteFill, { backgroundColor: isDarkMode ? 'rgba(0,0,0,0.6)' : 'rgba(255,255,255,0.4)' }]} />
           
           <LinearGradient
             colors={['transparent', colors.background]}
-            style={StyleSheet.absoluteFillObject}
+            style={StyleSheet.absoluteFill}
             locations={[0.5, 1]}
           />
 
@@ -289,7 +289,7 @@ export const EntityDetailScreen = ({ route }: { route?: RouteProps }) => {
         {!isOwner && (
           <Pressable onPress={handleSetOwner} style={[styles.thisIsMeContainer, { backgroundColor: '#ffffff', borderRadius: 30 }]}>
             <Ionicons name="star" size={20} color="#000000" style={{ marginRight: 8 }} />
-            <Text style={[styles.thisIsMeText, { color: '#000000', fontWeight: 'bold' }]}>Mark as "Me"</Text>
+            <Text style={[styles.thisIsMeText, { color: '#000000', fontWeight: 'bold' }]}>Mark as &quot;Me&quot;</Text>
           </Pressable>
         )}
 

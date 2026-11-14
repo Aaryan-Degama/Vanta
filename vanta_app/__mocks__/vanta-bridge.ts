@@ -78,3 +78,10 @@ export async function searchImages(query: string): Promise<string> {
     { abs_path: '/mock/photo2.jpg', display_name: `${query} result 2` },
   ]);
 }
+
+/**
+ * Records the search options pushed to the engine so tests can assert on them.
+ */
+export const setSearchOptions = jest.fn(
+  async (_useGraph: boolean, _useSpellCheck: boolean, _useIntent: boolean): Promise<void> => {}
+);

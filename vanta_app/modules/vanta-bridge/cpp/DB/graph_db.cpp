@@ -124,7 +124,8 @@ CREATE TABLE IF NOT EXISTS entity_relation_files (
 std::vector<EntityMeta> get_top_entities(sqlite3* db, int limit) {
     std::vector<EntityMeta> results;
     sqlite3_stmt* stmt = nullptr;
-    const char* sql = "SELECT entity_id, display_name, sample_count, confidence FROM entities WHERE entity_type = 'person' ORDER BY sample_count DESC LIMIT ?";
+    // Hide unlabelled single-sample clusters (mostly noise); an entity with a name or relation is always listed.
+    const char* sql = "SELECT entity_id, display_name, sample_count, confidence FROM entities WHERE entity_type = 'person' AND (sample_count >= 2 OR (display_name IS NOT NULL AND display_name != '') OR (relation IS NOT NULL AND relation != '')) ORDER BY sample_count DESC LIMIT ?";
     
     if (sqlite3_prepare_v2(db, sql, -1, &stmt, nullptr) != SQLITE_OK) {
         LOGE("Failed to prepare get_top_entities query: %s", sqlite3_errmsg(db));
@@ -246,7 +247,7 @@ bool update_graph_for_file(sqlite3* db, int64_t file_id) {
     // Step 1 - collect entities
     std::vector<int64_t> entities;
     sqlite3_stmt* stmt_select = nullptr;
-    const char* sql_select = "SELECT DISTINCT entity_id FROM face_detections WHERE file_id = ? AND entity_id IS NOT NULL";
+    const char* sql_select = "SELECT DISTINCT entity_id FROM face_detections WHERE file_id = ? AND entity_id > 0";
     
     if (sqlite3_prepare_v2(db, sql_select, -1, &stmt_select, nullptr) == SQLITE_OK) {
         sqlite3_bind_int64(stmt_select, 1, file_id);
@@ -260,32 +261,36 @@ bool update_graph_for_file(sqlite3* db, int64_t file_id) {
         return true;
     }
     
-    // Step 2 - open a transaction
+    // Step 2 - open a transaction (a savepoint, so it also nests inside the
+    // caller's per-photo transaction)
     char* err_msg = nullptr;
-    if (sqlite3_exec(db, "BEGIN", nullptr, nullptr, &err_msg) != SQLITE_OK) {
+    if (sqlite3_exec(db, "SAVEPOINT update_graph", nullptr, nullptr, &err_msg) != SQLITE_OK) {
         LOGE("Failed to begin transaction: %s", err_msg);
         sqlite3_free(err_msg);
         return false;
     }
     
     // Step 3 - prepare statements
-    const char* sql_upsert_edge = R"(
-INSERT INTO entity_relations (entity_a, entity_b, co_occurrence_count, first_seen_at, last_seen_at) 
-VALUES (?, ?, 1, ?, ?) 
-ON CONFLICT(entity_a, entity_b) DO UPDATE SET 
-co_occurrence_count = co_occurrence_count + 1, last_seen_at = excluded.last_seen_at
-)";
+    // Idempotent per (edge, file): the edge row is ensured first with a zero
+    // count (entity_relation_files has an FK to it, so the file row cannot be
+    // inserted before its edge exists), then the count is bumped only when
+    // the file row was actually new.
+    const char* sql_ensure_edge = "INSERT OR IGNORE INTO entity_relations (entity_a, entity_b, co_occurrence_count, first_seen_at, last_seen_at) VALUES (?, ?, 0, ?, ?)";
     const char* sql_insert_file = "INSERT OR IGNORE INTO entity_relation_files (entity_a, entity_b, file_id) VALUES (?, ?, ?)";
+    const char* sql_bump_edge = "UPDATE entity_relations SET co_occurrence_count = co_occurrence_count + 1, last_seen_at = ? WHERE entity_a = ? AND entity_b = ?";
     
-    sqlite3_stmt* stmt_upsert_edge = nullptr;
+    sqlite3_stmt* stmt_ensure_edge = nullptr;
     sqlite3_stmt* stmt_insert_file = nullptr;
+    sqlite3_stmt* stmt_bump_edge = nullptr;
     
-    if (sqlite3_prepare_v2(db, sql_upsert_edge, -1, &stmt_upsert_edge, nullptr) != SQLITE_OK ||
-        sqlite3_prepare_v2(db, sql_insert_file, -1, &stmt_insert_file, nullptr) != SQLITE_OK) {
+    if (sqlite3_prepare_v2(db, sql_ensure_edge, -1, &stmt_ensure_edge, nullptr) != SQLITE_OK ||
+        sqlite3_prepare_v2(db, sql_insert_file, -1, &stmt_insert_file, nullptr) != SQLITE_OK ||
+        sqlite3_prepare_v2(db, sql_bump_edge, -1, &stmt_bump_edge, nullptr) != SQLITE_OK) {
         LOGE("Failed to prepare graph update statements");
-        if (stmt_upsert_edge) sqlite3_finalize(stmt_upsert_edge);
+        if (stmt_ensure_edge) sqlite3_finalize(stmt_ensure_edge);
         if (stmt_insert_file) sqlite3_finalize(stmt_insert_file);
-        sqlite3_exec(db, "ROLLBACK", nullptr, nullptr, nullptr);
+        if (stmt_bump_edge) sqlite3_finalize(stmt_bump_edge);
+        sqlite3_exec(db, "ROLLBACK TO update_graph; RELEASE update_graph", nullptr, nullptr, nullptr);
         return false;
     }
     
@@ -297,19 +302,19 @@ co_occurrence_count = co_occurrence_count + 1, last_seen_at = excluded.last_seen
             int64_t a = std::min(entities[i], entities[j]);
             int64_t b = std::max(entities[i], entities[j]);
             
-            // Statement A
-            sqlite3_reset(stmt_upsert_edge);
-            sqlite3_bind_int64(stmt_upsert_edge, 1, a);
-            sqlite3_bind_int64(stmt_upsert_edge, 2, b);
-            sqlite3_bind_int64(stmt_upsert_edge, 3, now);
-            sqlite3_bind_int64(stmt_upsert_edge, 4, now);
+            // Statement A - make sure the edge row exists
+            sqlite3_reset(stmt_ensure_edge);
+            sqlite3_bind_int64(stmt_ensure_edge, 1, a);
+            sqlite3_bind_int64(stmt_ensure_edge, 2, b);
+            sqlite3_bind_int64(stmt_ensure_edge, 3, now);
+            sqlite3_bind_int64(stmt_ensure_edge, 4, now);
             
-            if (sqlite3_step(stmt_upsert_edge) != SQLITE_DONE) {
+            if (sqlite3_step(stmt_ensure_edge) != SQLITE_DONE) {
                 success = false;
                 break;
             }
             
-            // Statement B
+            // Statement B - record the file for this edge
             sqlite3_reset(stmt_insert_file);
             sqlite3_bind_int64(stmt_insert_file, 1, a);
             sqlite3_bind_int64(stmt_insert_file, 2, b);
@@ -319,25 +324,89 @@ co_occurrence_count = co_occurrence_count + 1, last_seen_at = excluded.last_seen
                 success = false;
                 break;
             }
+
+            // Statement C - count the file only if it was not already recorded
+            if (sqlite3_changes(db) > 0) {
+                sqlite3_reset(stmt_bump_edge);
+                sqlite3_bind_int64(stmt_bump_edge, 1, now);
+                sqlite3_bind_int64(stmt_bump_edge, 2, a);
+                sqlite3_bind_int64(stmt_bump_edge, 3, b);
+
+                if (sqlite3_step(stmt_bump_edge) != SQLITE_DONE) {
+                    success = false;
+                    break;
+                }
+            }
         }
         if (!success) break;
     }
     
-    sqlite3_finalize(stmt_upsert_edge);
+    sqlite3_finalize(stmt_ensure_edge);
     sqlite3_finalize(stmt_insert_file);
+    sqlite3_finalize(stmt_bump_edge);
     
     // Step 4 & 5
     if (!success) {
-        sqlite3_exec(db, "ROLLBACK", nullptr, nullptr, nullptr);
+        sqlite3_exec(db, "ROLLBACK TO update_graph; RELEASE update_graph", nullptr, nullptr, nullptr);
         return false;
     }
     
-    if (sqlite3_exec(db, "COMMIT", nullptr, nullptr, &err_msg) != SQLITE_OK) {
+    if (sqlite3_exec(db, "RELEASE update_graph", nullptr, nullptr, &err_msg) != SQLITE_OK) {
         LOGE("Failed to commit graph update transaction: %s", err_msg);
+        sqlite3_free(err_msg);
+        sqlite3_exec(db, "ROLLBACK TO update_graph; RELEASE update_graph", nullptr, nullptr, nullptr);
+        return false;
+    }
+    
+    return true;
+}
+
+bool rebuild_graph(sqlite3* db) {
+    // Derives both graph tables from face_detections. A savepoint is used so
+    // the rebuild is atomic on its own and can also run inside a caller's
+    // open transaction. Joining entities/files keeps a dangling detection
+    // from failing the whole rebuild on a foreign key.
+    static const char* const pair_from =
+        " FROM face_detections a"
+        " JOIN face_detections b ON a.file_id = b.file_id AND a.entity_id < b.entity_id"
+        " JOIN entities ea ON ea.entity_id = a.entity_id"
+        " JOIN entities eb ON eb.entity_id = b.entity_id"
+        " JOIN files f ON f.id = a.file_id"
+        " WHERE a.entity_id > 0 AND b.entity_id > 0";
+
+    const std::string steps[] = {
+        "DELETE FROM entity_relation_files",
+        "DELETE FROM entity_relations",
+        "INSERT INTO entity_relations (entity_a, entity_b, co_occurrence_count, first_seen_at, last_seen_at)"
+        " SELECT a.entity_id, b.entity_id, COUNT(DISTINCT a.file_id), MIN(a.created_at), MAX(a.created_at)"
+            + std::string(pair_from) + " GROUP BY a.entity_id, b.entity_id",
+        "INSERT INTO entity_relation_files (entity_a, entity_b, file_id)"
+        " SELECT DISTINCT a.entity_id, b.entity_id, a.file_id" + std::string(pair_from),
+    };
+
+    char* err_msg = nullptr;
+    if (sqlite3_exec(db, "SAVEPOINT rebuild_graph", nullptr, nullptr, &err_msg) != SQLITE_OK) {
+        LOGE("Failed to begin graph rebuild: %s", err_msg);
         sqlite3_free(err_msg);
         return false;
     }
-    
+
+    for (const std::string& sql : steps) {
+        if (sqlite3_exec(db, sql.c_str(), nullptr, nullptr, &err_msg) != SQLITE_OK) {
+            LOGE("Graph rebuild failed (%s): %s", sql.c_str(), err_msg);
+            sqlite3_free(err_msg);
+            sqlite3_exec(db, "ROLLBACK TO rebuild_graph; RELEASE rebuild_graph", nullptr, nullptr, nullptr);
+            return false;
+        }
+    }
+
+    if (sqlite3_exec(db, "RELEASE rebuild_graph", nullptr, nullptr, &err_msg) != SQLITE_OK) {
+        LOGE("Failed to commit graph rebuild: %s", err_msg);
+        sqlite3_free(err_msg);
+        sqlite3_exec(db, "ROLLBACK TO rebuild_graph; RELEASE rebuild_graph", nullptr, nullptr, nullptr);
+        return false;
+    }
+
     return true;
 }
 
@@ -376,7 +445,7 @@ std::vector<NeighborResult> get_neighbors(sqlite3* db, int64_t entity_id, int li
 std::vector<EntityFile> get_entity_files(sqlite3* db, int64_t entity_id, int limit) {
     std::vector<EntityFile> results;
     sqlite3_stmt* stmt = nullptr;
-    const char* sql = "SELECT em.file_id, f.abs_path FROM entity_memberships em JOIN files f ON f.id = em.file_id WHERE em.entity_id = ? ORDER BY em.score DESC LIMIT ?";
+    const char* sql = "SELECT em.file_id, f.abs_path FROM entity_memberships em JOIN files f ON f.id = em.file_id WHERE em.entity_id = ? ORDER BY em.score DESC, f.mtime_unix DESC LIMIT ?";
     
     if (sqlite3_prepare_v2(db, sql, -1, &stmt, nullptr) != SQLITE_OK) {
         LOGE("Failed to prepare get_entity_files query: %s", sqlite3_errmsg(db));

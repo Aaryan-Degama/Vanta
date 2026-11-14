@@ -1,5 +1,10 @@
 #include "Seg_model.hpp"
 
+// Faces whose shorter bbox side (original-image pixels, after clamping to the
+// image) is below this are dropped: upsampling a few pixels to 112x112 gives a
+// meaningless embedding. 20 px is a starting point, not a tuned value.
+static constexpr float kMinFaceSidePx = 20.0f;
+
 bool Face_embedding::load() {
     /*
     Loads the Buffalo_sc face detector and extractor ONNX models into memory
@@ -215,9 +220,10 @@ std::vector<FaceResult> Face_embedding::get_faces(const cv::Mat& image) {
        - Calculate scaling factor for later coordinate transformation
     
     3. NORMALIZATION:
+       - Reorder channels of the padded copy: BGR -> RGB (cv::cvtColor; SCRFD
+         expects RGB). The caller's `image` itself stays BGR.
        - Convert image to float32
        - Normalize pixel values: (pixel / 128.0) - (127.5 / 128.0)
-       - Reorder channels: BGR -> RGB (OpenCV standard conversion)
     
     4. TENSOR CREATION:
        - Convert normalized image to tensor format: (1, 3, 640, 640)
@@ -251,7 +257,10 @@ std::vector<FaceResult> Face_embedding::get_faces(const cv::Mat& image) {
     9. COORDINATE SCALING:
        - Scale all bounding boxes and keypoints back to original image size
        - Undo the scaling factor applied during preprocessing
-    
+       - Clamp each bounding box to the image and drop faces whose shorter
+         side is below kMinFaceSidePx (keypoints are left unclamped: alignment
+         needs their true positions even when they fall outside the image)
+
     For more details on FaceResult structure, see "Seg_model.hpp"
     */
 
@@ -260,14 +269,19 @@ std::vector<FaceResult> Face_embedding::get_faces(const cv::Mat& image) {
 
     // Image Padding (Letterbox)
     float scale = std::min(640.0f / image.cols, 640.0f / image.rows);
-    int new_w = std::round(image.cols * scale);
-    int new_h = std::round(image.rows * scale);
-    
+    // max(1, ...): an extreme aspect ratio would otherwise round to 0 and make cv::resize throw
+    int new_w = std::max(1, static_cast<int>(std::round(image.cols * scale)));
+    int new_h = std::max(1, static_cast<int>(std::round(image.rows * scale)));
+
     cv::Mat resized;
     cv::resize(image, resized, cv::Size(new_w, new_h));
-    
-    cv::Mat padded = cv::Mat::zeros(640, 640, CV_8UC3); 
+
+    cv::Mat padded = cv::Mat::zeros(640, 640, CV_8UC3);
     resized.copyTo(padded(cv::Rect(0, 0, new_w, new_h)));
+
+    // SCRFD expects RGB; `image` (and so `padded`) is BGR from OpenCV decoding.
+    // Only the padded copy is swapped: alignment/get_embedding need `image` as BGR.
+    cv::cvtColor(padded, padded, cv::COLOR_BGR2RGB);
 
     cv::Mat float_img;
     padded.convertTo(float_img, CV_32FC3, 1.0f / 128.0f, -127.5f / 128.0f);
@@ -398,6 +412,7 @@ std::vector<FaceResult> Face_embedding::get_faces(const cv::Mat& image) {
 
     std::vector<FaceResult> suppressed_results = nms(proposals, 0.4f);
 
+    const cv::Rect2f image_rect(0.0f, 0.0f, static_cast<float>(image.cols), static_cast<float>(image.rows));
     for (auto& face : suppressed_results) {
         face.bbox.x /= scale;
         face.bbox.y /= scale;
@@ -407,6 +422,11 @@ std::vector<FaceResult> Face_embedding::get_faces(const cv::Mat& image) {
             pt.x /= scale;
             pt.y /= scale;
         }
+
+        // Clamp to the image (a box fully outside becomes empty) and drop tiny faces.
+        face.bbox &= image_rect;
+        if (std::min(face.bbox.width, face.bbox.height) < kMinFaceSidePx) continue;
+
         final_results.push_back(face);
     }
 
@@ -414,30 +434,29 @@ std::vector<FaceResult> Face_embedding::get_faces(const cv::Mat& image) {
 }
 
 cv::Mat Face_embedding::align_face(const cv::Mat& image, const FaceResult& face) {
-    cv::Mat src_pts(5, 2, CV_32FC1, (void*)face.keypoints.data());
-    cv::Mat dst_pts(5, 2, CV_32FC1, (void*)kTargetLandmarks);
-    
-    // Cropping the Image that is alignning it
-    cv::Mat transformation_matrix = cv::estimateAffinePartial2D(src_pts, dst_pts);
-    
-    cv::Mat aligned_face;
-    cv::warpAffine(image, aligned_face, transformation_matrix, cv::Size(112, 112), cv::INTER_CUBIC);
-    return aligned_face;
+    return align_face(image, face, 112);
 }
 
 cv::Mat Face_embedding::align_face(const cv::Mat& image, const FaceResult& face, int output_size) {
+    // Returns an empty Mat when the face cannot be aligned; callers must check.
+    if (image.empty() || output_size <= 0 || face.keypoints.size() != 5) return cv::Mat();
+
     // Scale the canonical 112-px landmarks to the requested output size
     const float scale = static_cast<float>(output_size) / 112.0f;
+    float src_pts[5][2];
     float scaled_landmarks[5][2];
     for (int i = 0; i < 5; ++i) {
+        src_pts[i][0] = face.keypoints[i].x;
+        src_pts[i][1] = face.keypoints[i].y;
         scaled_landmarks[i][0] = kTargetLandmarks[i][0] * scale;
         scaled_landmarks[i][1] = kTargetLandmarks[i][1] * scale;
     }
 
-    cv::Mat src_pts(5, 2, CV_32FC1, (void*)face.keypoints.data());
-    cv::Mat dst_pts(5, 2, CV_32FC1, (void*)scaled_landmarks);
-
-    cv::Mat transformation_matrix = cv::estimateAffinePartial2D(src_pts, dst_pts);
+    // Least-squares similarity over all five landmarks (not RANSAC): this is
+    // the alignment ArcFace was trained with.
+    double m[6];
+    if (!fit_similarity_2d(src_pts, scaled_landmarks, 5, m)) return cv::Mat();
+    cv::Mat transformation_matrix = (cv::Mat_<double>(2, 3) << m[0], m[1], m[2], m[3], m[4], m[5]);
 
     cv::Mat aligned_face;
     cv::warpAffine(image, aligned_face, transformation_matrix, cv::Size(output_size, output_size), cv::INTER_CUBIC);
@@ -460,11 +479,13 @@ std::vector<std::vector<float>> Face_embedding::get_embedding(const cv::Mat& ima
         - Embeddings are L2-normalized (magnitude = 1.0)
         - Can be compared for face similarity using cosine distance or Euclidean distance
         - Empty vector if image is invalid or no faces provided
-        
+        - A face whose alignment failed gets an EMPTY embedding in its slot, so
+          result[i] always corresponds to faces[i]; callers must skip empty ones
+
     ALGORITHM STEPS FOR EACH FACE:
-    
+
     1. FACE ALIGNMENT:
-       - Use 5 facial keypoints to estimate affine transformation
+       - Use 5 facial keypoints to fit a least-squares similarity transform
        - Align detected face to standard landmark positions (defined in kTargetLandmarks)
        - Crop and warp face region to normalized 112x112 size
        - Ensures consistent face orientation and scale
@@ -503,8 +524,13 @@ std::vector<std::vector<float>> Face_embedding::get_embedding(const cv::Mat& ima
     for (const auto& face : faces) {
 
         cv::Mat aligned_face = align_face(image, face);
+        if (aligned_face.empty()) {
+            // Alignment failed: keep the slot so indices still match `faces`.
+            all_embeddings.emplace_back();
+            continue;
+        }
 
-        // Converting the RGB to BGR (OpenCV standard)
+        // Converting BGR (OpenCV standard) to the RGB the extractor expects
         cv::Mat rgb_face, float_face;
         cv::cvtColor(aligned_face, rgb_face, cv::COLOR_BGR2RGB); 
         rgb_face.convertTo(float_face, CV_32FC3, 1.0 / 127.5, -1.0);

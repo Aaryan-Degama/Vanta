@@ -64,6 +64,13 @@ std::vector<EntityMeta> get_top_entities(sqlite3* db, int limit);
 FaceCrop get_best_face_crop(sqlite3* db, int64_t entity_id);
 bool set_entity_name(sqlite3* db, int64_t entity_id, const std::string& name);
 bool update_graph_for_file(sqlite3* db, int64_t file_id);
+
+/**
+ * Rebuilds entity_relations and entity_relation_files from face_detections,
+ * atomically. Call after anything that re-assigns or deletes entities in bulk
+ * (recluster_pending_faces, merge_similar_entities, reset_face_data re-run).
+ */
+bool rebuild_graph(sqlite3* db);
 std::vector<NeighborResult> get_neighbors(sqlite3* db, int64_t entity_id, int limit);
 std::vector<EntityFile> get_entity_files(sqlite3* db, int64_t entity_id, int limit);
 

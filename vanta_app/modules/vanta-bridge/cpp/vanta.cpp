@@ -3,6 +3,10 @@
 #include <vector>
 #include <mutex>
 #include <atomic>
+#include <exception>
+#include <filesystem>
+#include <system_error>
+#include <utility>
 #include <android/log.h>
 
 #include "Config.hpp"
@@ -18,7 +22,7 @@
 
 static CLIPTokenizer* g_tokenizer = nullptr;
 static vanta::ner::NERModel* g_ner_model = nullptr;
-static int64_t g_owner_entity_id = -1;
+static std::atomic<int64_t> g_owner_entity_id(-1);
 
 // Guards all global model/session state so indexing and search cannot race
 // while creating or loading sessions.
@@ -110,6 +114,7 @@ Java_expo_modules_vantaengine_VantaEngineModule_startStoring(
     // Field IDs matching the FileMeta data class in Android_scan.kt
     jfieldID contentUriField   = env->GetFieldID(fileMetaClass, "contentUri",    "Ljava/lang/String;");
     jfieldID absPathField      = env->GetFieldID(fileMetaClass, "absPath",       "Ljava/lang/String;");
+    jfieldID displayNameField  = env->GetFieldID(fileMetaClass, "displayName",   "Ljava/lang/String;");
     jfieldID fileDtypeField    = env->GetFieldID(fileMetaClass, "fileDtype",     "Lexpo/modules/vantaengine/FileType;");
     jfieldID mimeTypeField     = env->GetFieldID(fileMetaClass, "mimeType",      "Ljava/lang/String;");
     jfieldID sizeBytesField    = env->GetFieldID(fileMetaClass, "sizeBytes",     "J");
@@ -150,6 +155,15 @@ Java_expo_modules_vantaengine_VantaEngineModule_startStoring(
                 env->ReleaseStringUTFChars(jContentUri, contentUriCstr);
                 env->DeleteLocalRef(jContentUri);
             }
+        }
+
+        // displayName (String)
+        jstring jDisplayName = (jstring)env->GetObjectField(fileObj, displayNameField);
+        if (jDisplayName != nullptr) {
+            const char* displayNameCstr = env->GetStringUTFChars(jDisplayName, nullptr);
+            meta.display_name = displayNameCstr;
+            env->ReleaseStringUTFChars(jDisplayName, displayNameCstr);
+            env->DeleteLocalRef(jDisplayName);
         }
 
         // fileDtype (FileType enum → string via .name())
@@ -290,9 +304,54 @@ static CLIP_session* g_clip_session = nullptr;
 static Face_embedding* g_face_session = nullptr;
 static std::atomic<int> g_index_processed_count(0);
 static std::atomic<int> g_index_total_count(0);
+// Written by the indexing thread and read by the progress poller; only touch
+// these two strings through the helpers below.
+static std::mutex g_index_state_mutex;
 static std::string g_current_processing_file = "";
 static std::string g_index_status = "idle";
+
+static void set_index_status(const std::string& status) {
+    std::lock_guard<std::mutex> lock(g_index_state_mutex);
+    g_index_status = status;
+}
+
+static void set_current_processing_file(const std::string& file) {
+    std::lock_guard<std::mutex> lock(g_index_state_mutex);
+    g_current_processing_file = file;
+}
+
+static void get_index_state(std::string& status, std::string& file) {
+    std::lock_guard<std::mutex> lock(g_index_state_mutex);
+    status = g_index_status;
+    file = g_current_processing_file;
+}
 static std::atomic<bool> g_pause_embedding(false);
+
+// Held for the whole of an indexing run or a face re-scan: the two rewrite the
+// same tables, so the second one to start is refused instead of interleaving.
+static std::mutex g_job_mutex;
+
+// Photos committed since the end-of-run passes last completed; guarded by
+// g_job_mutex. Kept across runs, so the photos of a paused or failed run still
+// get the passes when a later run finishes with nothing left to index.
+// Starts at 1 so the first run of each process always runs the passes: a
+// re-scan or a run killed before its passes finished leaves pending faces and
+// an empty/stale graph that only those passes repair, and that state outlives
+// the process while this counter does not.
+// ponytail: in memory only, so the first run after every restart pays for the
+// passes once. Persist a "passes needed" flag if that cost ever matters.
+static int g_photos_since_passes = 1;
+
+// For an indexing run that was refused because another job holds g_job_mutex.
+// The status belongs to the job that holds the lock, so an active status is
+// left alone; a leftover one becomes "paused" (not "failed": nothing went
+// wrong and the pending photos can be indexed later), which stops the poller.
+static void mark_index_paused_unless_active() {
+    std::lock_guard<std::mutex> lock(g_index_state_mutex);
+    if (g_index_status != "processing" && g_index_status != "loading_models") {
+        g_index_status = "paused";
+    }
+}
 
 extern "C" int sqlite3_vec_init(sqlite3 *db, char **pzErrMsg, const void *pApi);
 
@@ -322,110 +381,228 @@ Java_expo_modules_vantaengine_VantaEngineModule_generateEmbeddingsNative(
     jobject /* this */,
     jstring dbPath) {
 
-    if (dbPath == nullptr) return JNI_FALSE;
-
-    const char* db_path_cstr = env->GetStringUTFChars(dbPath, nullptr);
-    std::string db_path(db_path_cstr);
-    env->ReleaseStringUTFChars(dbPath, db_path_cstr);
-
-    // Ensure sqlite-vec is registered before creating/opening the DB
-    sqlite3_auto_extension((void (*)())sqlite3_vec_init);
-
-    sqlite3* db = initialize_database(db_path);
-    if (!db) {
-        LOGE("Failed to open DB for indexing");
+    std::unique_lock<std::mutex> job_lock(g_job_mutex, std::try_to_lock);
+    if (!job_lock.owns_lock()) {
+        LOGE("Indexing not started: another indexing run or a face re-scan is in progress");
+        mark_index_paused_unless_active();
         return JNI_FALSE;
     }
 
-    if (!init_clip_db(db)) {
-        LOGE("Failed to init vector db");
-        sqlite3_close(db);
-        return JNI_FALSE;
-    }
+    // An exception leaving a JNI function terminates the process, so nothing
+    // may escape this block.
+    sqlite3* db = nullptr;
+    try {
+        // Replaces the terminal status left by the previous run before any work,
+        // so the JS poller never mistakes it for the outcome of this run.
+        set_index_status("loading_models");
+        // Cleared here rather than after model loading, so a pause requested while
+        // the models load is honoured instead of being overwritten.
+        g_pause_embedding.store(false);
 
-    {
-        std::lock_guard<std::mutex> lock(g_session_mutex);
-
-        if (!g_clip_session) {
-            g_clip_session = new CLIP_session();
+        // Every failure return below reports "failed" so the JS poller can stop.
+        if (dbPath == nullptr) {
+            set_index_status("failed");
+            return JNI_FALSE;
         }
 
-        g_index_status = "loading_models";
-        if (!g_clip_session->is_loaded()) {
-            if (!g_clip_session->load()) {
-                LOGE("Failed to load CLIP model");
-                sqlite3_close(db);
-                return JNI_FALSE;
+        const char* db_path_cstr = env->GetStringUTFChars(dbPath, nullptr);
+        if (db_path_cstr == nullptr) {
+            set_index_status("failed");
+            return JNI_FALSE;
+        }
+        std::string db_path(db_path_cstr);
+        env->ReleaseStringUTFChars(dbPath, db_path_cstr);
+
+        // Ensure sqlite-vec is registered before creating/opening the DB
+        sqlite3_auto_extension((void (*)())sqlite3_vec_init);
+
+        db = initialize_database(db_path);
+        if (!db) {
+            LOGE("Failed to open DB for indexing");
+            set_index_status("failed");
+            return JNI_FALSE;
+        }
+
+        if (!init_clip_db(db)) {
+            LOGE("Failed to init vector db");
+            set_index_status("failed");
+            sqlite3_close(db);
+            return JNI_FALSE;
+        }
+
+        {
+            std::lock_guard<std::mutex> lock(g_session_mutex);
+
+            if (!g_clip_session) {
+                g_clip_session = new CLIP_session();
+            }
+
+            if (!g_clip_session->is_loaded()) {
+                if (!g_clip_session->load()) {
+                    LOGE("Failed to load CLIP model");
+                    set_index_status("failed");
+                    sqlite3_close(db);
+                    return JNI_FALSE;
+                }
+            }
+
+            if (!g_face_session) {
+                g_face_session = new Face_embedding();
+            }
+            if (!g_face_session->is_loaded()) {
+                if (!g_face_session->load()) {
+                    LOGE("Failed to load Face model");
+                    set_index_status("failed");
+                    sqlite3_close(db);
+                    return JNI_FALSE;
+                }
             }
         }
 
-        if (!g_face_session) {
-            g_face_session = new Face_embedding();
-        }
-        if (!g_face_session->is_loaded()) {
-            if (!g_face_session->load()) {
-                LOGE("Failed to load Face model");
-                sqlite3_close(db);
-                return JNI_FALSE;
-            }
-        }
-    }
+        LOGI("Starting embedding generation...");
+        int total_to_process = get_picture_count(db_path);
+        int unindexed_count = get_unindexed_picture_count(db_path);
 
-    LOGI("Starting embedding generation...");
-    int total_to_process = get_picture_count(db_path);
-    int unindexed_count = get_unindexed_picture_count(db_path);
-    
-    g_index_total_count.store(total_to_process);
-    g_index_processed_count.store(total_to_process - unindexed_count);
-    g_index_status = "processing";
-    g_pause_embedding.store(false);
+        g_index_total_count.store(total_to_process);
+        g_index_processed_count.store(total_to_process - unindexed_count);
+        set_index_status("processing");
 
-    while (!g_pause_embedding.load()) {
-        std::vector<file_meta> images = get_unindexed_images(db_path, 10);
-        if (images.empty()) break;
+        // Pause is only checked here, between batches, so it never interrupts
+        // a photo's transaction.
+        while (!g_pause_embedding.load()) {
+            std::vector<file_meta> images = get_unindexed_images(db_path, 10);
+            if (images.empty()) break;
 
-        for (const auto& img_meta : images) {
-            std::string path = img_meta.content_uri; 
-            g_current_processing_file = path;
-            try {
-                CLIP_instance clip_img(path);
-                std::vector<float> embedding = g_clip_session->get_embedding(clip_img);
-                
-                if (save_clip_embedding(db, img_meta.id, embedding)) {
-                    // Also run face pipeline
-                    if (run_face_pipeline(db, path, img_meta.id, *g_face_session)) {
-                        cluster_faces_for_file(db, img_meta.id);
-                        update_graph_for_file(db, img_meta.id);
+            // Photos that are neither indexed nor marked failed stay pending
+            // and come back in the next batch; a batch where that happens to
+            // every photo would repeat forever.
+            bool progressed = false;
+
+            for (const auto& img_meta : images) {
+                std::string path = img_meta.content_uri;
+                set_current_processing_file(path);
+
+                // One transaction per photo: the CLIP embedding, the 'indexed'
+                // status, the faces, their clusters and the graph edges are
+                // committed together, so a photo is never left 'indexed' with
+                // half of its face data (it is only selected while 'pending').
+                bool in_transaction = false;
+                bool indexed = false;
+                try {
+                    // All models (CLIP, face detection and embedding) run before
+                    // the write lock is taken, so the transaction below only
+                    // writes; this also gives other writers a turn between two photos.
+                    CLIP_instance clip_img(path);
+                    std::vector<float> embedding = g_clip_session->get_embedding(clip_img);
+                    std::vector<ComputedFace> faces;
+                    bool faces_read = compute_faces(path, img_meta.id, *g_face_session, faces);
+
+                    if (sqlite3_exec(db, "BEGIN IMMEDIATE;", nullptr, nullptr, nullptr) != SQLITE_OK) {
+                        // Nothing was written; the photo stays pending and is retried.
+                        LOGE("Failed to begin transaction for %s: %s", path.c_str(), sqlite3_errmsg(db));
+                        continue;
+                    }
+                    in_transaction = true;
+
+                    bool ok = save_clip_embedding(db, img_meta.id, embedding);
+                    if (!ok) {
+                        LOGE("Failed to save embedding for %s", path.c_str());
+                    } else if (faces_read) {
+                        store_faces(db, img_meta.id, faces);
+                        // Fails the photo: unassigned faces could later only join existing
+                        // people (recluster_pending_faces never creates one).
+                        ok = cluster_faces_for_file(db, img_meta.id);
+                        if (!ok) {
+                            LOGE("Failed to cluster faces for %s", path.c_str());
+                        } else if (!update_graph_for_file(db, img_meta.id)) {
+                            // Does not fail the photo: the edges are derived data
+                            // and the end-of-run rebuild_graph restores them.
+                            LOGE("Failed to update graph for %s", path.c_str());
+                        }
                     } else {
+                        // Unreadable for the face models: stored nothing, the photo is indexed without faces.
                         LOGE("Failed to run face pipeline for %s", path.c_str());
                     }
 
-                    g_index_processed_count++;
-                } else {
-                    LOGE("Failed to save embedding for %s", path.c_str());
-                    update_file_status(db, img_meta.id, "failed");
+                    if (ok) {
+                        indexed = sqlite3_exec(db, "COMMIT;", nullptr, nullptr, nullptr) == SQLITE_OK;
+                        if (!indexed) LOGE("Failed to commit %s: %s", path.c_str(), sqlite3_errmsg(db));
+                    }
+                } catch (const std::exception& e) {
+                    LOGE("Error processing image %s: %s", path.c_str(), e.what());
+                } catch (...) {
+                    LOGE("Unknown error processing image %s", path.c_str());
                 }
-            } catch (const std::exception& e) {
-                LOGE("Error processing image %s: %s", path.c_str(), e.what());
-                update_file_status(db, img_meta.id, "failed");
+
+                if (indexed) {
+                    g_index_processed_count++;
+                    g_photos_since_passes++;
+                    progressed = true;
+                    continue;
+                }
+
+                // The rollback comes first so that the 'failed' mark is a
+                // statement of its own and is not undone with the photo's rows.
+                // ponytail: face crops written for a photo that then fails stay
+                // on disk unreferenced (a failed photo is never retried); they are small
+                // and the next face re-scan clears the directory. Delete them
+                // here if failed photos ever become common.
+                if (in_transaction) sqlite3_exec(db, "ROLLBACK;", nullptr, nullptr, nullptr);
+                if (update_file_status(db, img_meta.id, "failed")) progressed = true;
+            }
+
+            if (!progressed) {
+                LOGE("No photo of the batch could be indexed or marked failed; stopping the run");
+                set_index_status("failed");
+                sqlite3_close(db);
+                return JNI_FALSE;
             }
         }
+
+        if (g_pause_embedding.load()) {
+            // The end-of-run passes are skipped: a pause should return quickly,
+            // every committed photo is complete and its graph edges are already
+            // in place, and the passes run when the resumed run finishes.
+            set_index_status("paused");
+            LOGI("Embedding generation paused by user.");
+        } else if (g_photos_since_passes == 0) {
+            // Nothing was indexed since the passes last ran, so recluster and
+            // rebuild would find nothing new; they cost O(pending faces x
+            // people) on every run. A merge allowed only by a rename made
+            // since then waits for the next run that indexes a photo.
+            LOGI("No new photos since the last end-of-run passes; skipping them.");
+            set_index_status("finished");
+        } else {
+            // No photo transaction is open here; the merge opens its own.
+            LOGI("Finished generating embeddings for all images. Running second pass reclustering...");
+            recluster_pending_faces(db);
+            LOGI("Second pass reclustering finished. Running entity merge pass...");
+            merge_similar_entities(db, g_owner_entity_id.load());
+            LOGI("Entity merge pass finished. Rebuilding graph...");
+            // Reclustering and merging re-assign faces in bulk, which the
+            // per-photo graph updates never saw.
+            if (!rebuild_graph(db)) {
+                LOGE("Graph rebuild failed; the graph is incomplete until the next run finishes");
+            } else {
+                g_photos_since_passes = 0;
+            }
+            // Only now: "finished" is terminal for the poller, and the job
+            // lock is held until the passes are done.
+            set_index_status("finished");
+        }
+
+        sqlite3_close(db);
+        return JNI_TRUE;
+    } catch (const std::exception& e) {
+        LOGE("Indexing aborted by an exception: %s", e.what());
+    } catch (...) {
+        LOGE("Indexing aborted by an unknown exception");
     }
 
-    if (g_pause_embedding.load()) {
-        g_index_status = "paused";
-        LOGI("Embedding generation paused by user.");
-    } else {
-        g_index_status = "finished";
-        LOGI("Finished generating embeddings for all images. Running second pass reclustering...");
-        recluster_pending_faces(db);
-        LOGI("Second pass reclustering finished. Running entity merge pass...");
-        merge_similar_entities(db);
-        LOGI("Entity merge pass finished.");
-    }
-
-    sqlite3_close(db);
-    return JNI_TRUE;
+    // Closing the connection rolls back a transaction that was left open.
+    if (db) sqlite3_close(db);
+    set_index_status("failed");
+    return JNI_FALSE;
 }
 
 extern "C" JNIEXPORT void JNICALL
@@ -442,11 +619,14 @@ Java_expo_modules_vantaengine_VantaEngineModule_getIndexProgressNative(
 
     // Build a safe JSON object for the current indexing progress. Strings are
     // escaped because currentFile may contain arbitrary file paths.
+    std::string status, current_file;
+    get_index_state(status, current_file);
+
     std::string json = "{" +
         json_number_field("processed", g_index_processed_count.load()) + "," +
         json_number_field("total", g_index_total_count.load()) + "," +
-        json_string_field("status", g_index_status) + "," +
-        json_string_field("currentFile", g_current_processing_file) +
+        json_string_field("status", status) + "," +
+        json_string_field("currentFile", current_file) +
         "}";
 
     return env->NewStringUTF(json.c_str());
@@ -511,18 +691,20 @@ Java_expo_modules_vantaengine_VantaEngineModule_searchImagesNative(
         if (!g_tokenizer) {
             g_tokenizer = new CLIPTokenizer();
         }
-    }
 
-    if (!g_tokenizer->is_loaded()) {
-        LOGI("Loading CLIP tokenizer...");
-        const VantaConfig& cfg = VantaConfig::instance();
-        std::string vocab_path = cfg.model_path("vocab.json");
-        std::string merges_path = cfg.model_path("merges.txt");
-        if (!g_tokenizer->load(vocab_path, merges_path)) {
-            LOGE("Failed to load CLIP Tokenizer");
-            return env->NewStringUTF("[]");
+        // Loaded under g_session_mutex: concurrent cold-start searches must
+        // not both mutate the tokenizer's maps.
+        if (!g_tokenizer->is_loaded()) {
+            LOGI("Loading CLIP tokenizer...");
+            const VantaConfig& cfg = VantaConfig::instance();
+            std::string vocab_path = cfg.model_path("vocab.json");
+            std::string merges_path = cfg.model_path("merges.txt");
+            if (!g_tokenizer->load(vocab_path, merges_path)) {
+                LOGE("Failed to load CLIP Tokenizer");
+                return env->NewStringUTF("[]");
+            }
+            LOGI("CLIP tokenizer loaded successfully.");
         }
-        LOGI("CLIP tokenizer loaded successfully.");
     }
 
     // Lazy-init NER model (mutex-protected, same pattern as CLIP)
@@ -555,7 +737,7 @@ Java_expo_modules_vantaengine_VantaEngineModule_searchImagesNative(
 
     std::vector<search_result> results = search_images(
         db_path, query, g_clip_session, g_tokenizer,
-        ner_ptr, g_owner_entity_id);
+        ner_ptr, g_owner_entity_id.load());
 
     LOGI("Building JSON response for %zu results", results.size());
 
@@ -684,6 +866,7 @@ Java_expo_modules_vantaengine_VantaEngineModule_setEntityNameNative(
         if (db) sqlite3_close(db);
         return JNI_FALSE;
     }
+    sqlite3_busy_timeout(db, 5000);
 
     bool success = set_entity_name(db, static_cast<int64_t>(entityId), entity_name);
     if (success) {
@@ -815,6 +998,7 @@ Java_expo_modules_vantaengine_VantaEngineModule_setEntityMetadataNative(
         if (db) sqlite3_close(db);
         return JNI_FALSE;
     }
+    sqlite3_busy_timeout(db, 5000);
 
     bool success = set_entity_metadata(db, static_cast<int64_t>(entityId),
                                        entity_name, entity_relation,
@@ -870,8 +1054,8 @@ Java_expo_modules_vantaengine_VantaEngineModule_setOwnerEntityIdNative(
     jobject /* this */,
     jlong entityId) {
 
-    g_owner_entity_id = static_cast<int64_t>(entityId);
-    LOGI("Owner entity ID set to: %ld", (long)g_owner_entity_id);
+    g_owner_entity_id.store(static_cast<int64_t>(entityId));
+    LOGI("Owner entity ID set to: %ld", (long)entityId);
 }
 
 extern "C" JNIEXPORT void JNICALL
@@ -893,88 +1077,169 @@ Java_expo_modules_vantaengine_VantaEngineModule_resetFaceDataNative(
 
     if (dbPath == nullptr) return JNI_FALSE;
 
-    const char* db_path_cstr = env->GetStringUTFChars(dbPath, nullptr);
-    std::string db_path(db_path_cstr);
-    env->ReleaseStringUTFChars(dbPath, db_path_cstr);
-
-    // Ensure sqlite-vec is registered
-    sqlite3_auto_extension((void (*)())sqlite3_vec_init);
-
-    sqlite3* db = initialize_database(db_path);
-    if (!db) {
-        LOGE("Failed to open DB for resetFaceData");
+    std::unique_lock<std::mutex> job_lock(g_job_mutex, std::try_to_lock);
+    if (!job_lock.owns_lock()) {
+        LOGE("Face re-scan not started: indexing or another re-scan is in progress");
         return JNI_FALSE;
     }
 
-    if (!init_face_schema(db)) {
-        LOGE("Failed to init face schema for reset");
-        sqlite3_close(db);
-        return JNI_FALSE;
-    }
+    // An exception leaving a JNI function terminates the process, so nothing
+    // may escape this block.
+    sqlite3* db = nullptr;
+    try {
+        const char* db_path_cstr = env->GetStringUTFChars(dbPath, nullptr);
+        if (db_path_cstr == nullptr) return JNI_FALSE;
+        std::string db_path(db_path_cstr);
+        env->ReleaseStringUTFChars(dbPath, db_path_cstr);
 
-    // Wipe all face data
-    if (!reset_face_data(db)) {
-        LOGE("Failed to reset face data");
-        sqlite3_close(db);
-        return JNI_FALSE;
-    }
+        // Ensure sqlite-vec is registered
+        sqlite3_auto_extension((void (*)())sqlite3_vec_init);
 
-    // Delete crop files from disk
-    std::string crops_dir = VantaConfig::instance().crops_dir();
-    if (!crops_dir.empty()) {
-        std::string cmd = "rm -rf " + crops_dir + "/*";
-        system(cmd.c_str());
-        LOGI("Cleared crop files from: %s", crops_dir.c_str());
-    }
-
-    // Re-run face pipeline on all indexed picture files (skip CLIP)
-    LOGI("Re-running face pipeline on all indexed images...");
-
-    {
-        std::lock_guard<std::mutex> lock(g_session_mutex);
-        if (!g_face_session) {
-            g_face_session = new Face_embedding();
+        db = initialize_database(db_path);
+        if (!db) {
+            LOGE("Failed to open DB for resetFaceData");
+            return JNI_FALSE;
         }
-        if (!g_face_session->is_loaded()) {
-            if (!g_face_session->load()) {
-                LOGE("Failed to load Face model for re-indexing");
-                sqlite3_close(db);
-                return JNI_FALSE;
+
+        if (!init_face_schema(db)) {
+            LOGE("Failed to init face schema for reset");
+            sqlite3_close(db);
+            return JNI_FALSE;
+        }
+
+        // Loaded before anything is deleted: without the model the faces
+        // could not be rebuilt.
+        {
+            std::lock_guard<std::mutex> lock(g_session_mutex);
+            if (!g_face_session) {
+                g_face_session = new Face_embedding();
+            }
+            if (!g_face_session->is_loaded()) {
+                if (!g_face_session->load()) {
+                    LOGE("Failed to load Face model for re-indexing");
+                    sqlite3_close(db);
+                    return JNI_FALSE;
+                }
             }
         }
-    }
 
-    // Query all indexed picture files
-    const char* sql = "SELECT id, abs_path FROM files WHERE filetype = 'picture' AND status = 'indexed'";
-    sqlite3_stmt* stmt = nullptr;
-    if (sqlite3_prepare_v2(db, sql, -1, &stmt, nullptr) != SQLITE_OK) {
-        LOGE("Failed to query indexed files for face re-processing: %s", sqlite3_errmsg(db));
+        // Wipe all face data
+        if (!reset_face_data(db)) {
+            LOGE("Failed to reset face data");
+            sqlite3_close(db);
+            return JNI_FALSE;
+        }
+
+        // Every entity is gone, the owner ("Me") entity included.
+        g_owner_entity_id.store(-1);
+
+        // Delete crop files from disk
+        std::string crops_dir = VantaConfig::instance().crops_dir();
+        if (!crops_dir.empty()) {
+            std::error_code ec;
+            for (std::filesystem::directory_iterator it(crops_dir, ec), end; !ec && it != end; it.increment(ec)) {
+                std::error_code remove_ec;
+                std::filesystem::remove_all(it->path(), remove_ec);
+                if (remove_ec) LOGE("Failed to remove %s: %s", it->path().c_str(), remove_ec.message().c_str());
+            }
+            if (ec) {
+                LOGE("Failed to list crop files in %s: %s", crops_dir.c_str(), ec.message().c_str());
+            } else {
+                LOGI("Cleared crop files from: %s", crops_dir.c_str());
+            }
+        }
+
+        // Re-run face pipeline on all indexed picture files (skip CLIP)
+        LOGI("Re-running face pipeline on all indexed images...");
+
+        // Query all indexed picture files. They are read into memory first: a
+        // cursor left open across the writes below pins this connection to an
+        // old snapshot, and its writes then fail as soon as any other
+        // connection commits.
+        std::vector<std::pair<int64_t, std::string>> files;
+        const char* sql = "SELECT id, abs_path FROM files WHERE filetype = 'picture' AND status = 'indexed'";
+        sqlite3_stmt* stmt = nullptr;
+        if (sqlite3_prepare_v2(db, sql, -1, &stmt, nullptr) != SQLITE_OK) {
+            LOGE("Failed to query indexed files for face re-processing: %s", sqlite3_errmsg(db));
+            sqlite3_close(db);
+            return JNI_FALSE;
+        }
+        while (sqlite3_step(stmt) == SQLITE_ROW) {
+            const char* path = reinterpret_cast<const char*>(sqlite3_column_text(stmt, 1));
+            if (!path) continue;
+            files.emplace_back(sqlite3_column_int64(stmt, 0), path);
+        }
+        sqlite3_finalize(stmt);
+
+        int processed = 0;
+        for (const auto& file : files) {
+            int64_t file_id = file.first;
+            const std::string& abs_path = file.second;
+
+            // One transaction per file, so a file never keeps half of its
+            // faces. The face models run first, without the write lock, so
+            // the transaction only writes and takes the lock up front
+            // (IMMEDIATE), the same as the indexing loop, so it waits on the
+            // busy timeout at BEGIN instead of failing part-way through.
+            bool in_transaction = false;
+            bool done = false;
+            try {
+                std::vector<ComputedFace> faces;
+                // Unreadable for the face models: nothing to store, the file
+                // is left without faces.
+                if (!compute_faces(abs_path, file_id, *g_face_session, faces)) continue;
+
+                if (sqlite3_exec(db, "BEGIN IMMEDIATE;", nullptr, nullptr, nullptr) != SQLITE_OK) {
+                    LOGE("Failed to begin transaction for %s: %s", abs_path.c_str(), sqlite3_errmsg(db));
+                    continue;
+                }
+                in_transaction = true;
+
+                store_faces(db, file_id, faces);
+                bool ok = cluster_faces_for_file(db, file_id);
+                if (!ok) LOGE("Failed to cluster faces for %s", abs_path.c_str());
+
+                if (ok) {
+                    done = sqlite3_exec(db, "COMMIT;", nullptr, nullptr, nullptr) == SQLITE_OK;
+                    if (!done) LOGE("Failed to commit %s: %s", abs_path.c_str(), sqlite3_errmsg(db));
+                    if (done) processed++;
+                }
+            } catch (const std::exception& e) {
+                LOGE("Error re-processing faces of %s: %s", abs_path.c_str(), e.what());
+            } catch (...) {
+                LOGE("Unknown error re-processing faces of %s", abs_path.c_str());
+            }
+
+            // A file that failed is left without faces and the re-scan goes on.
+            if (in_transaction && !done) sqlite3_exec(db, "ROLLBACK;", nullptr, nullptr, nullptr);
+
+            if (processed % 100 == 0 && processed > 0) {
+                LOGI("Face re-processing progress: %d files", processed);
+            }
+        }
+
+        LOGI("Face re-processing complete: %d files processed. Running recluster...", processed);
+        recluster_pending_faces(db);
+        // Same end-of-run passes as an indexing run; the graph was emptied by
+        // the reset and is built here from the new detections.
+        merge_similar_entities(db, g_owner_entity_id.load());
+        if (!rebuild_graph(db)) {
+            LOGE("Graph rebuild failed after face re-scan");
+        } else {
+            // The passes cover every photo, including any a paused run left.
+            g_photos_since_passes = 0;
+        }
+        LOGI("Face data reset and re-indexed successfully.");
+
         sqlite3_close(db);
-        return JNI_FALSE;
+        return JNI_TRUE;
+    } catch (const std::exception& e) {
+        LOGE("Face re-scan aborted by an exception: %s", e.what());
+    } catch (...) {
+        LOGE("Face re-scan aborted by an unknown exception");
     }
 
-    int processed = 0;
-    while (sqlite3_step(stmt) == SQLITE_ROW) {
-        int64_t file_id = sqlite3_column_int64(stmt, 0);
-        const char* path = reinterpret_cast<const char*>(sqlite3_column_text(stmt, 1));
-        if (!path) continue;
-
-        std::string abs_path(path);
-        if (run_face_pipeline(db, abs_path, file_id, *g_face_session)) {
-            cluster_faces_for_file(db, file_id);
-            processed++;
-        }
-
-        if (processed % 100 == 0 && processed > 0) {
-            LOGI("Face re-processing progress: %d files", processed);
-        }
-    }
-    sqlite3_finalize(stmt);
-
-    LOGI("Face re-processing complete: %d files processed. Running recluster...", processed);
-    recluster_pending_faces(db);
-    LOGI("Face data reset and re-indexed successfully.");
-
-    sqlite3_close(db);
-    return JNI_TRUE;
+    // Closing the connection rolls back a transaction that was left open.
+    if (db) sqlite3_close(db);
+    return JNI_FALSE;
 }

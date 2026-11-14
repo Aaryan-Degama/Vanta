@@ -4,10 +4,16 @@
 #include "graph_db.hpp"
 #include "IntentBuilder.hpp"
 #include <algorithm>
+#include <atomic>
+#include <cctype>
+#include <cerrno>
 #include <cmath>
+#include <cstdlib>
+#include <mutex>
 #include <sstream>
 #include <unordered_set>
 #include <chrono>
+#include <unistd.h>
 #include <android/log.h>
 
 #define SQLITE_CORE 1
@@ -17,19 +23,28 @@
 #define LOGE(...) __android_log_print(ANDROID_LOG_ERROR, LOG_TAG, __VA_ARGS__)
 #define LOGI(...) __android_log_print(ANDROID_LOG_INFO, LOG_TAG, __VA_ARGS__)
 
+// Guards g_analyzer: it is deleted/recreated by rebuild_query_engine_dictionary
+// (rename/metadata JNI calls) while a search thread may be using it.
+static std::mutex g_analyzer_mutex;
 static VantaProductionAnalyzer* g_analyzer = nullptr;
-static vanta::query::IntentBuilder* g_intent_builder = nullptr;
 
-static bool g_use_graph = true;
-static bool g_use_spellcheck = true;
-static bool g_use_intent = true;
+// Stateless after construction and only used through const methods, so a
+// function-local static (thread-safe init) needs no lock.
+static const vanta::query::IntentBuilder& intent_builder() {
+    static const vanta::query::IntentBuilder builder;
+    return builder;
+}
+
+static std::atomic<bool> g_use_graph{true};
+static std::atomic<bool> g_use_spellcheck{true};
+static std::atomic<bool> g_use_intent{true};
 
 void set_query_options(bool use_graph, bool use_spellcheck, bool use_intent) {
     g_use_graph = use_graph;
     g_use_spellcheck = use_spellcheck;
     g_use_intent = use_intent;
-    LOGI("Search options updated: Graph=%d, SpellCheck=%d, Intent=%d", 
-         g_use_graph, g_use_spellcheck, g_use_intent);
+    LOGI("Search options updated: Graph=%d, SpellCheck=%d, Intent=%d",
+         use_graph, use_spellcheck, use_intent);
 }
 
 // ── Helper: lowercase ──
@@ -48,7 +63,8 @@ static std::string strip_possessive(const std::string& s) {
     return s;
 }
 
-bool init_query_engine(const std::string& db_path) {
+// Caller must hold g_analyzer_mutex.
+static bool init_query_engine_locked(const std::string& db_path) {
     if (!g_analyzer) {
         SymSpellDictionary dict;
         std::vector<std::string> whitelist;
@@ -109,25 +125,38 @@ bool init_query_engine(const std::string& db_path) {
 
         g_analyzer = new VantaProductionAnalyzer(dict, whitelist);
     }
-    if (!g_intent_builder) {
-        g_intent_builder = new vanta::query::IntentBuilder();
-    }
     LOGI("Query engine initialized.");
     return true;
 }
 
+bool init_query_engine(const std::string& db_path) {
+    std::lock_guard<std::mutex> lock(g_analyzer_mutex);
+    return init_query_engine_locked(db_path);
+}
+
 void rebuild_query_engine_dictionary(const std::string& db_path) {
+    std::lock_guard<std::mutex> lock(g_analyzer_mutex);
     if (g_analyzer) {
         delete g_analyzer;
         g_analyzer = nullptr;
     }
-    init_query_engine(db_path);
+    init_query_engine_locked(db_path);
     LOGI("Query engine dictionary rebuilt.");
 }
 
-std::string get_corrected_query(const std::string& raw_query, const std::string& db_path) {
+std::string get_corrected_query(const std::string& raw_query, const std::string& db_path,
+                                const CLIPTokenizer* tokenizer) {
+    // Held for the whole call: covers lazy init, the predicate install and analyze().
+    std::lock_guard<std::mutex> lock(g_analyzer_mutex);
     if (!g_analyzer) {
-        init_query_engine(db_path);
+        init_query_engine_locked(db_path);
+    }
+    // Re-installed per call: the analyzer is recreated on dictionary rebuild, and
+    // clearing it when no tokenizer is passed avoids holding a stale pointer.
+    if (tokenizer && tokenizer->is_loaded()) {
+        g_analyzer->set_known_word_predicate([tokenizer](const std::string& w) { return tokenizer->has_word(w); });
+    } else {
+        g_analyzer->set_known_word_predicate(nullptr);
     }
     QueryAnalysis analysis = g_analyzer->analyze(raw_query);
     if (analysis.was_corrected) {
@@ -170,6 +199,34 @@ int damerau_levenshtein(const std::string& s1, const std::string& s2) {
 }
 
 // ── Span resolution ──
+// Edit-distance budget scales with the span length, so short words ("dog",
+// "cat") only match a name or relation exactly.
+static int allowed_name_distance(size_t span_len) {
+    if (span_len <= 4) return 0;
+    if (span_len <= 7) return 1;
+    return 2;
+}
+
+// Smallest edit distance from `span` to the full name, any whitespace-separated
+// token of the name, or the relation. Empty fields are skipped (999 = nothing
+// to compare against).
+static int name_match_distance(const std::string& span, const std::string& name,
+                               const std::string& relation) {
+    int best = 999;
+    if (!name.empty()) {
+        best = damerau_levenshtein(span, name);
+        std::istringstream iss(name);
+        std::string token;
+        while (iss >> token) {
+            best = std::min(best, damerau_levenshtein(span, token));
+        }
+    }
+    if (!relation.empty()) {
+        best = std::min(best, damerau_levenshtein(span, relation));
+    }
+    return best;
+}
+
 int64_t resolve_span_to_entity_id(
     const std::string& span_text,
     const std::vector<EntityCandidate>& candidates,
@@ -185,18 +242,19 @@ int64_t resolve_span_to_entity_id(
     // Strip trailing "'s" possessive
     lower = strip_possessive(lower);
 
-    int best_dist = 3;
+    if (lower.empty()) return -1;
+
+    const int max_dist = allowed_name_distance(lower.size());
+    int best_dist = max_dist + 1;
     int64_t best_id = -1;
     int best_count = 0;
 
     for (const auto& c : candidates) {
-        std::string dn = to_lower(c.display_name);
-        std::string rel = to_lower(c.relation);
+        // Unnamed clusters can never be what the user typed.
+        if (c.display_name.empty() && c.relation.empty()) continue;
 
-        int d = std::min(
-            damerau_levenshtein(lower, dn),
-            rel.empty() ? 999 : damerau_levenshtein(lower, rel)
-        );
+        int d = name_match_distance(lower, to_lower(c.display_name), to_lower(c.relation));
+        if (d > max_dist) continue;
 
         if (d < best_dist || (d == best_dist && c.sample_count > best_count)) {
             best_dist = d;
@@ -205,11 +263,59 @@ int64_t resolve_span_to_entity_id(
         }
     }
 
-    if (best_dist <= 2) {
+    if (best_id != -1) {
         LOGI("Resolved span '%s' → entity_id=%ld (dist=%d)", span_text.c_str(), (long)best_id, best_dist);
     }
 
-    return best_dist <= 2 ? best_id : -1;
+    return best_id;
+}
+
+// ── Caption token matching ──
+// Lower-cases, trims surrounding ASCII punctuation and strips a possessive, so
+// "John's," compares equal to the resolved span token "john".
+static std::string normalize_caption_token(const std::string& word) {
+    size_t b = 0, e = word.size();
+    while (b < e && std::ispunct(static_cast<unsigned char>(word[b]))) ++b;
+    while (e > b && std::ispunct(static_cast<unsigned char>(word[e - 1]))) --e;
+    return strip_possessive(to_lower(word.substr(b, e - b)));
+}
+
+// Set of normalized tokens of every resolved span ("john smith" → {john, smith}).
+static std::unordered_set<std::string> span_token_set(
+    const std::unordered_set<std::string>& span_texts) {
+    std::unordered_set<std::string> tokens;
+    for (const auto& st : span_texts) {
+        std::istringstream iss(st);
+        std::string token;
+        while (iss >> token) {
+            std::string t = normalize_caption_token(token);
+            if (!t.empty()) tokens.insert(t);
+        }
+    }
+    return tokens;
+}
+
+// ── Result assembly helpers ──
+// Photos taken within this many seconds of an accepted result count as one burst.
+static const int64_t BURST_WINDOW_SECONDS = 3;
+
+static bool is_burst_duplicate(const std::vector<search_result>& accepted, int64_t mtime_unix) {
+    if (mtime_unix <= 0) return false;
+    for (const auto& a : accepted) {
+        if (a.mtime_unix > 0 && std::llabs(a.mtime_unix - mtime_unix) < BURST_WINDOW_SECONDS) {
+            return true;
+        }
+    }
+    return false;
+}
+
+// True only for an absolute filesystem path that is definitely gone. The path
+// column may instead hold a content:// URI (or be empty), which cannot be
+// checked here and is always kept; so is a path that fails for any reason other
+// than "does not exist" (e.g. EACCES).
+static bool is_missing_file(const std::string& path) {
+    return !path.empty() && path[0] == '/' &&
+           access(path.c_str(), F_OK) != 0 && errno == ENOENT;
 }
 
 // ── Dot product ──
@@ -372,14 +478,10 @@ std::vector<search_result> search_images(
         return results;
     }
 
-    if (!g_intent_builder) {
-        g_intent_builder = new vanta::query::IntentBuilder();
-    }
-
     // ── Step 1: Typo-correct ──
     std::string corrected_query = raw_query;
     if (g_use_spellcheck) {
-        corrected_query = get_corrected_query(raw_query, db_path);
+        corrected_query = get_corrected_query(raw_query, db_path, tokenizer);
         LOGI("search_images: raw='%s' corrected='%s'", raw_query.c_str(), corrected_query.c_str());
     } else {
         LOGI("search_images: raw='%s' (spellcheck disabled)", raw_query.c_str());
@@ -470,30 +572,20 @@ std::vector<search_result> search_images(
         std::string cleaned;
         std::istringstream iss(corrected_query);
         std::string word;
+        // Whole-token equality: resolving "amanda" must not drop "man".
+        const std::unordered_set<std::string> resolved_tokens = span_token_set(resolved_span_texts);
         while (iss >> word) {
-            std::string lw = to_lower(word);
-            lw = strip_possessive(lw);
-            bool covered = false;
-            for (const auto& st : resolved_span_texts) {
-                if (st.find(lw) != std::string::npos || lw.find(st) != std::string::npos) {
-                    covered = true;
-                    break;
-                }
-            }
-            if (!covered) {
+            if (resolved_tokens.count(normalize_caption_token(word)) == 0) {
                 if (!cleaned.empty()) cleaned += " ";
                 cleaned += word;
             }
         }
-
-        for (const auto& uw : unresolved_words) {
-            if (!cleaned.empty()) cleaned += " ";
-            cleaned += uw;
-        }
+        // Unresolved span words are not appended here: they come from
+        // corrected_query and were already kept by the loop above.
 
         if (!cleaned.empty()) {
             if (g_use_intent) {
-                clip_caption = g_intent_builder->buildIntent("", cleaned);
+                clip_caption = intent_builder().buildIntent("", cleaned);
                 if (clip_caption.empty()) {
                     clip_caption = cleaned;
                 }
@@ -682,14 +774,13 @@ std::vector<search_result> search_images(
                           return a.score > b.score;
                       });
 
-            if (static_cast<int>(scored.size()) > top_k) {
-                scored.resize(top_k);
-            }
-
+            // Not truncated to top_k here: skipped rows (bursts, deleted files,
+            // failed face verification) are back-filled from the full list.
             const char* file_sql = "SELECT abs_path, display_name, size_bytes, mtime_unix FROM files WHERE id = ?";
             sqlite3_stmt* file_stmt = nullptr;
             if (sqlite3_prepare_v2(db, file_sql, -1, &file_stmt, nullptr) == SQLITE_OK) {
                 for (const auto& sc : scored) {
+                    if (static_cast<int>(results.size()) >= top_k) break;
                     sqlite3_reset(file_stmt);
                     sqlite3_bind_int64(file_stmt, 1, sc.file_id);
 
@@ -707,23 +798,18 @@ std::vector<search_result> search_images(
                         res.size_bytes = sqlite3_column_int64(file_stmt, 2);
                         res.mtime_unix = sqlite3_column_int64(file_stmt, 3);
 
+                        if (is_missing_file(res.abs_path)) {
+                            LOGI("File for file_id=%ld no longer exists, skipping", (long)res.file_id);
+                            continue;
+                        }
+
                         // FIX #3: Face verification — ensure all resolved entities are in this file
                         if (!verify_entities_in_file(db, res.file_id, resolved_entity_ids, require_all_entities)) {
                             LOGI("Face verification failed for file_id=%ld, skipping", (long)res.file_id);
                             continue;
                         }
 
-                        bool is_burst = false;
-                        if (res.mtime_unix > 0) {
-                            for (const auto& accepted : results) {
-                                if (accepted.mtime_unix > 0 && std::abs(accepted.mtime_unix - res.mtime_unix) < 30) {
-                                    is_burst = true;
-                                    break;
-                                }
-                            }
-                        }
-
-                        if (!is_burst) {
+                        if (!is_burst_duplicate(results, res.mtime_unix)) {
                             results.push_back(res);
                         }
                     }
@@ -741,26 +827,44 @@ std::vector<search_result> search_images(
             struct membership_hit {
                 int64_t file_id;
                 float score;
+                int64_t mtime_unix;
             };
             std::vector<membership_hit> hits;
 
-            for (const auto& kv : combined_scores) {
-                hits.push_back({kv.first, kv.second});
+            {
+                // mtime is only needed to order equal scores (newest first).
+                sqlite3_stmt* mtime_stmt = nullptr;
+                if (sqlite3_prepare_v2(db, "SELECT mtime_unix FROM files WHERE id = ?", -1,
+                                       &mtime_stmt, nullptr) != SQLITE_OK) {
+                    mtime_stmt = nullptr;
+                }
+                for (const auto& kv : combined_scores) {
+                    int64_t mtime = 0;
+                    if (mtime_stmt) {
+                        sqlite3_reset(mtime_stmt);
+                        sqlite3_bind_int64(mtime_stmt, 1, kv.first);
+                        if (sqlite3_step(mtime_stmt) == SQLITE_ROW) {
+                            mtime = sqlite3_column_int64(mtime_stmt, 0);
+                        }
+                    }
+                    hits.push_back({kv.first, kv.second, mtime});
+                }
+                sqlite3_finalize(mtime_stmt);
             }
 
             std::sort(hits.begin(), hits.end(),
                       [](const membership_hit& a, const membership_hit& b) {
-                          return a.score > b.score;
+                          if (a.score != b.score) return a.score > b.score;
+                          if (a.mtime_unix != b.mtime_unix) return a.mtime_unix > b.mtime_unix;
+                          return a.file_id > b.file_id;
                       });
 
-            if (static_cast<int>(hits.size()) > top_k) {
-                hits.resize(top_k);
-            }
-
+            // Not truncated to top_k here: skipped rows are back-filled below.
             const char* file_sql = "SELECT abs_path, display_name, size_bytes, mtime_unix FROM files WHERE id = ?";
             sqlite3_stmt* file_stmt = nullptr;
             if (sqlite3_prepare_v2(db, file_sql, -1, &file_stmt, nullptr) == SQLITE_OK) {
                 for (const auto& h : hits) {
+                    if (static_cast<int>(results.size()) >= top_k) break;
                     sqlite3_reset(file_stmt);
                     sqlite3_bind_int64(file_stmt, 1, h.file_id);
 
@@ -778,23 +882,18 @@ std::vector<search_result> search_images(
                         res.size_bytes = sqlite3_column_int64(file_stmt, 2);
                         res.mtime_unix = sqlite3_column_int64(file_stmt, 3);
 
+                        if (is_missing_file(res.abs_path)) {
+                            LOGI("File for file_id=%ld no longer exists, skipping", (long)res.file_id);
+                            continue;
+                        }
+
                         // FIX #3: Face verification
                         if (!verify_entities_in_file(db, res.file_id, resolved_entity_ids, require_all_entities)) {
                             LOGI("Face verification failed for file_id=%ld, skipping", (long)res.file_id);
                             continue;
                         }
 
-                        bool is_burst = false;
-                        if (res.mtime_unix > 0) {
-                            for (const auto& accepted : results) {
-                                if (accepted.mtime_unix > 0 && std::abs(accepted.mtime_unix - res.mtime_unix) < 30) {
-                                    is_burst = true;
-                                    break;
-                                }
-                            }
-                        }
-
-                        if (!is_burst) {
+                        if (!is_burst_duplicate(results, res.mtime_unix)) {
                             results.push_back(res);
                         }
                     }
@@ -837,7 +936,11 @@ std::vector<search_result> search_images(
 
             sqlite3_bind_blob(knn_stmt, 1, query_embedding.data(),
                               static_cast<int>(query_embedding.size() * sizeof(float)), SQLITE_STATIC);
-            sqlite3_bind_int(knn_stmt, 2, top_k);
+            // ponytail: fixed 4x over-fetch so rows skipped below (deleted files) can be
+            // back-filled; if more than 3/4 of the nearest hits are gone the result is
+            // still short. Real fix is purging deleted files from the index at scan time.
+            // 4096 is sqlite-vec's hard limit on k.
+            sqlite3_bind_int(knn_stmt, 2, std::min(top_k * 4, 4096));
 
             while (sqlite3_step(knn_stmt) == SQLITE_ROW) {
                 knn_hit h;
@@ -860,6 +963,7 @@ std::vector<search_result> search_images(
             }
 
             for (const auto& h : hits) {
+                if (static_cast<int>(results.size()) >= top_k) break;
                 sqlite3_reset(file_stmt);
                 sqlite3_bind_int64(file_stmt, 1, h.file_id);
 
@@ -876,6 +980,11 @@ std::vector<search_result> search_images(
 
                     res.size_bytes = sqlite3_column_int64(file_stmt, 2);
                     res.mtime_unix = sqlite3_column_int64(file_stmt, 3);
+
+                    if (is_missing_file(res.abs_path)) {
+                        LOGI("File for file_id=%ld no longer exists, skipping", (long)res.file_id);
+                        continue;
+                    }
 
                     results.push_back(res);
                 }

@@ -11,6 +11,8 @@ const mockNavigation = {
   navigate: () => {},
   goBack: () => {},
   setOptions: () => {},
+  // Returns the unsubscribe function, as the real API does.
+  addListener: () => () => {},
 };
 
 /**

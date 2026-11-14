@@ -22,6 +22,40 @@ import expo.modules.kotlin.modules.Module
 import expo.modules.kotlin.modules.ModuleDefinition
 import expo.modules.kotlin.Promise
 
+/**
+ * Copies one bundled model asset into [modelsDir] unless it is already there.
+ *
+ * The copy goes to a sibling ".tmp" file that is renamed into place only once
+ * it is complete, so an interrupted copy (process killed, storage full) never
+ * leaves a truncated model under the final name. Shared with IndexingService;
+ * synchronized because both extract on their own threads and would otherwise
+ * write the same ".tmp" file.
+ */
+@Synchronized
+internal fun extractModelAsset(context: Context, modelsDir: java.io.File, fileName: String) {
+    val file = java.io.File(modelsDir, fileName)
+    if (file.exists()) return
+
+    val tmpFile = java.io.File(modelsDir, "$fileName.tmp")
+    try {
+        tmpFile.delete()
+        context.assets.open("VantaModels/$fileName").use { input ->
+            java.io.FileOutputStream(tmpFile).use { output ->
+                input.copyTo(output)
+                output.fd.sync()
+            }
+        }
+        if (!tmpFile.renameTo(file)) {
+            throw java.io.IOException("Could not rename ${tmpFile.name} to $fileName")
+        }
+    } catch (e: Exception) {
+        // Asset may be missing in development; the C++ layer will log
+        // a clearer error when it tries to load the model.
+        tmpFile.delete()
+        Log.w("VantaEngine", "Failed to extract asset $fileName", e)
+    }
+}
+
 class VantaEngineModule : Module() {
 
     companion object {
@@ -160,20 +194,7 @@ class VantaEngineModule : Module() {
         )
 
         for (fileName in filesToCopy) {
-            val file = java.io.File(modelsDir, fileName)
-            if (file.exists()) continue
-
-            try {
-                context.assets.open("VantaModels/$fileName").use { input ->
-                    java.io.FileOutputStream(file).use { output ->
-                        input.copyTo(output)
-                    }
-                }
-            } catch (e: Exception) {
-                // Asset may be missing in development; the C++ layer will log
-                // a clearer error when it tries to load the model.
-                Log.w("VantaEngine", "Failed to extract asset $fileName", e)
-            }
+            extractModelAsset(context, modelsDir, fileName)
         }
     }
 
@@ -445,6 +466,12 @@ class VantaEngineModule : Module() {
                     setModelsDirNative(VantaEngineConfig.getModelsDirectory(context))
                     setCropsDirNative(VantaEngineConfig.getCropsDirectory(context))
                     val result = resetFaceDataNative(dbPath)
+                    if (result) {
+                        // The reset deleted every entity, so the stored "Me"
+                        // id is dead (native has already dropped its copy).
+                        context.getSharedPreferences("vanta_prefs", Context.MODE_PRIVATE)
+                            .edit().remove("owner_entity_id").apply()
+                    }
                     promise.resolve(result)
                 } catch (e: Exception) {
                     promise.reject("ERR", e.message, e)

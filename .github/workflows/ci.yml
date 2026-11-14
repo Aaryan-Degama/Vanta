@@ -1,0 +1,60 @@
+# Continuous integration workflow for the Vanta app.
+#
+# Runs on every push and pull request to main. It validates TypeScript,
+# enforces the project lint rules, and runs the Jest test suite for the React
+# Native app in vanta_app/.
+#
+# Not run here:
+# - The Android native build: it needs the generated (gitignored) android/
+#   project and an OpenCV Android SDK that is not part of this repository.
+# - `npm run format:check`: the tree is not Prettier-clean yet. Run
+#   `npm run format` once and add the step back to enforce formatting.
+name: CI
+
+on:
+  push:
+    branches: [main]
+  pull_request:
+    branches: [main]
+
+# The app lives in a subdirectory; every `run` step executes from there.
+defaults:
+  run:
+    working-directory: vanta_app
+
+jobs:
+  js-checks:
+    name: JavaScript / TypeScript checks
+    runs-on: ubuntu-latest
+
+    steps:
+      # Checkout the repository.
+      - name: Checkout
+        uses: actions/checkout@v4
+
+      # Set up Node.js. This must match the version pinned in package.json.
+      # `with` paths are relative to the repository root, not the working
+      # directory above.
+      - name: Setup Node
+        uses: actions/setup-node@v4
+        with:
+          node-version-file: vanta_app/package.json
+          cache: npm
+          cache-dependency-path: vanta_app/package-lock.json
+
+      # Install dependencies exactly as locked.
+      - name: Install dependencies
+        run: npm ci
+
+      # Run ESLint (eslint . --ext .ts,.tsx,.js,.jsx). Warnings are non-fatal
+      # but errors fail CI.
+      - name: Lint
+        run: npm run lint
+
+      # Run TypeScript type checking (tsc --noEmit).
+      - name: Type check
+        run: npm run typecheck
+
+      # Run the Jest test suite (jest).
+      - name: Test
+        run: npm test

@@ -16,6 +16,7 @@ module.exports = {
   // Modules that cannot run in Node are replaced with manual mocks.
   moduleNameMapper: {
     // Mock the vanta-bridge native module so tests never call JNI/C++ code.
+    '^./modules/vanta-bridge$': '<rootDir>/__mocks__/vanta-bridge.ts',
     '^../modules/vanta-bridge$': '<rootDir>/__mocks__/vanta-bridge.ts',
     '^../../modules/vanta-bridge$': '<rootDir>/__mocks__/vanta-bridge.ts',
     '^../ThemeContext$': '<rootDir>/__mocks__/ThemeContext.tsx',
@@ -24,6 +25,10 @@ module.exports = {
     '^@react-navigation/native-stack$': '<rootDir>/__mocks__/@react-navigation/native-stack.tsx',
     // Mock vector icons to avoid loading native fonts in Node.
     '^@expo/vector-icons$': '<rootDir>/__mocks__/@expo/vector-icons.tsx',
+    // AsyncStorage throws at import time without its native module; use the
+    // in-memory mock that ships with the package.
+    '^@react-native-async-storage/async-storage$':
+      '<rootDir>/node_modules/@react-native-async-storage/async-storage/jest/async-storage-mock.js',
     // Mock the Expo runtime so native module declarations load in Node.
     '^expo$': '<rootDir>/__mocks__/expo.ts',
   },
@@ -44,7 +49,7 @@ module.exports = {
   // Everything else inside node_modules is transformed so ESM-only packages
   // like expo-modules-core work in the Node test environment.
   transformIgnorePatterns: [
-    'node_modules/(?!(react-native|@react-native|@react-navigation|@expo|expo|expo-modules-core|expo-font|@expo/vector-icons|@unimodules|react-native-cloneable|react-native-safe-area-context|react-native-screens|@testing-library)/)',
+    'node_modules/(?!(react-native|@react-native|@react-navigation|@expo|expo|expo-modules-core|expo-font|expo-linear-gradient|expo-blur|@expo/vector-icons|@unimodules|react-native-cloneable|react-native-safe-area-context|react-native-screens|@testing-library)/)',
   ],
 
   // Environment globals available in tests.

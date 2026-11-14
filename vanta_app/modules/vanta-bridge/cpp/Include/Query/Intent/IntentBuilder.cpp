@@ -179,10 +179,14 @@ std::string IntentBuilder::buildIntent(const std::string& originalQuery, const s
                 } else if (lastPersonMatch.empty()) {
                     lastPersonMatch = it->second;
                 }
-            } else if (token.isCapitalized && fillerWords.find(token.lower) == fillerWords.end() && 
+            } else if (fillerWords.find(token.lower) == fillerWords.end() &&
                        placesMap.find(token.lower) == placesMap.end() && eventsMap.find(token.lower) == eventsMap.end()) {
-                // Heuristic: Capitalized unknown word is likely a name (person)
-                personCount++;
+                // Residue: a word no dictionary covers (e.g. "dog", "car", "cake"). A caption built
+                // only from the maps would silently drop it, so return "" and let the caller fall
+                // back to the user's own words. This also covers capitalized unknown words, which
+                // used to be guessed as a person's name ("Dog at the beach" -> "portrait of a person").
+                LOGI("Intent: unmapped word '%s', falling back to raw query", token.lower.c_str());
+                return "";
             }
         }
     }

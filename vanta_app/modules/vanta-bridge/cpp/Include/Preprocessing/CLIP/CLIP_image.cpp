@@ -1,5 +1,7 @@
 #include "CLIP_image.hpp"
 
+#include <algorithm>    // std::min, std::max
+
 CLIP_instance::CLIP_instance (std::string &path) {
     image = load_img(path);
 }
@@ -16,7 +18,14 @@ cv::Mat CLIP_instance::load_img(std::string& path){
         return image;
     }
 
-    cv::resize(image, image, cv::Size(224, 224));   // Resize to 224 x 224
+    // CLIP reference preprocessing (short side to 224, aspect ratio kept, then centre-crop 224 x 224),
+    // done as crop-then-resize: the centre square is exactly the region that ends up in the window,
+    // and resizing only it keeps an extreme aspect ratio (e.g. 2 x 5000 px) from being upscaled whole.
+    int side = std::min(image.cols, image.rows);
+    cv::Mat square = image(cv::Rect((image.cols - side) / 2, (image.rows - side) / 2, side, side));
+    cv::Mat resized;
+    cv::resize(square, resized, cv::Size(224, 224), 0, 0, side > 224 ? cv::INTER_AREA : cv::INTER_CUBIC);
+    image = resized;
     cv::cvtColor(image, image, cv::COLOR_BGR2RGB);  // BGR to RGB
     image.convertTo(image, CV_32F, 1.0 / 255.0);    // Convert pixels to float32 (0.0 to 1.0)
     

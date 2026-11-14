@@ -92,6 +92,12 @@ bool CLIPTokenizer::load(const std::string& vocab_path, const std::string& merge
     return true;
 }
 
+bool CLIPTokenizer::has_word(const std::string& w) const {
+    std::string key = w;
+    std::transform(key.begin(), key.end(), key.begin(), ::tolower);
+    return vocab_.count(key + "</w>") != 0;
+}
+
 std::vector<std::string> CLIPTokenizer::get_pairs(const std::vector<std::string>& word) {
     std::vector<std::string> pairs;
     if (word.size() < 2) return pairs;

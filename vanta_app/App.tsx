@@ -1,11 +1,13 @@
-import React from 'react';
+import React, { useEffect } from 'react';
 import {
   NavigationContainer,
   DefaultTheme,
   DarkTheme as NavigationDarkTheme,
 } from '@react-navigation/native';
 import { createNativeStackNavigator } from '@react-navigation/native-stack';
+import AsyncStorage from '@react-native-async-storage/async-storage';
 import { ThemeProvider, useTheme } from './ThemeContext';
+import { setSearchOptions } from './modules/vanta-bridge';
 
 import SearchScreen from './screens/SearchScreen';
 import SettingsScreen from './screens/SettingsScreen';
@@ -70,6 +72,20 @@ function RootNavigator() {
 }
 
 export default function App() {
+  // The native engine starts with every search option on. Push the toggles
+  // saved by AdvancedOptionScreen (same keys and JSON encoding, default true)
+  // once at startup so they take effect without revisiting that screen.
+  useEffect(() => {
+    AsyncStorage.multiGet(['use_graph', 'use_spellcheck', 'use_intent'])
+      .then((pairs) => {
+        const [useGraph, useSpellCheck, useIntent] = pairs.map(([, value]): boolean =>
+          value !== null ? JSON.parse(value) : true
+        );
+        return setSearchOptions(useGraph, useSpellCheck, useIntent);
+      })
+      .catch((e) => console.error('Failed to apply saved search options', e));
+  }, []);
+
   return (
     <ErrorBoundary>
       <ThemeProvider>

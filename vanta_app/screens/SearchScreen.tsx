@@ -126,6 +126,9 @@ export default function SearchScreen() {
   const [searchQuery, setSearchQuery] = useState('');
   const [results, setResults] = useState<SearchResultItem[]>([]);
   const [isSearching, setIsSearching] = useState(false);
+  // True once a search has completed, so an empty result set can be told apart
+  // from the idle "not searched yet" state.
+  const [hasSearched, setHasSearched] = useState(false);
   // Ref to the results scroll view so we can scroll to top on new searches.
   const scrollViewRef = useRef<ScrollView | null>(null);
 
@@ -181,7 +184,10 @@ export default function SearchScreen() {
       const jsonRes = await searchImages(searchQuery);
       const parsedResults = JSON.parse(jsonRes);
       setResults(Array.isArray(parsedResults) ? parsedResults : []);
+      setHasSearched(true);
     } catch (err) {
+      // A failed search is not "no results"; fall back to the idle view.
+      setHasSearched(false);
       handleError(err);
     } finally {
       setIsSearching(false);
@@ -194,12 +200,13 @@ export default function SearchScreen() {
         style={[styles.header, { position: 'absolute', top: 50, left: 20, right: 20, zIndex: 10 }]}
       >
         <View style={{ width: 90, alignItems: 'flex-start' }}>
-          {(results.length > 0 || isSearching) && (
+          {(results.length > 0 || isSearching || hasSearched) && (
             <TouchableOpacity
               style={[styles.iconButton, { backgroundColor: 'rgba(0,0,0,0.6)' }]}
               onPress={() => {
                 setSearchQuery('');
                 setResults([]);
+                setHasSearched(false);
               }}
             >
               <Ionicons name="chevron-back" size={24} color="#ffffff" />
@@ -250,12 +257,18 @@ export default function SearchScreen() {
                 transform: [{ scaleY: -1 }],
               }}
             >
-              <Ionicons name="images-outline" size={64} color="#8e8e93" />
+              <Ionicons
+                name={hasSearched ? 'search-outline' : 'images-outline'}
+                size={64}
+                color="#8e8e93"
+              />
               <Text style={{ color: colors.text, fontSize: 20, fontWeight: 'bold', marginTop: 20 }}>
-                Search your photos
+                {hasSearched ? 'No results' : 'Search your photos'}
               </Text>
               <Text style={{ color: '#8e8e93', fontSize: 14, marginTop: 8 }}>
-                Results will appear here in a grid
+                {hasSearched
+                  ? 'No photos matched your search. Try different words.'
+                  : 'Results will appear here in a grid'}
               </Text>
             </View>
           ) : (
@@ -310,7 +323,11 @@ export default function SearchScreen() {
             placeholder="<Query>"
             placeholderTextColor="#8e8e93"
             value={searchQuery}
-            onChangeText={setSearchQuery}
+            onChangeText={(text) => {
+              setSearchQuery(text);
+              // Clearing the query returns an empty result view to idle.
+              if (!text.trim()) setHasSearched(false);
+            }}
             onSubmitEditing={handleSearch}
             returnKeyType="search"
           />

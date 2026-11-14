@@ -4,6 +4,7 @@
 #include <vector>
 #include <unordered_set>
 #include <unordered_map>
+#include <functional>
 
 struct CorrectionResult {
     std::string word;
@@ -34,9 +35,14 @@ private:
     std::unordered_set<std::string> whitelist;
     int max_edit_distance;
     float confidence_threshold;
+    // Optional "is this a real word" guard (e.g. the CLIP vocabulary). Unset = no guard.
+    std::function<bool(const std::string&)> known_word;
 
 public:
     VantaProductionAnalyzer(const SymSpellDictionary& symspell_dict, const std::vector<std::string>& whitelist_terms);
+
+    // Tokens the predicate accepts are never rewritten. Pass nullptr to clear.
+    void set_known_word_predicate(std::function<bool(const std::string&)> pred) { known_word = std::move(pred); }
 
     // 1. O(N) Manual Normalization
     std::string normalize_query(const std::string& query);

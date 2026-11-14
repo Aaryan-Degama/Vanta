@@ -141,6 +141,19 @@ CorrectionResult VantaProductionAnalyzer::correct_token(const std::string& token
         return {token, token, 1.0f, 0};
     }
 
+    // Short tokens are too close to everything in a small dictionary (dog->dad, moon->mom)
+    if (token.length() <= 4) {
+        return {token, token, 1.0f, 0};
+    }
+
+    // Known-word guard: a real word is not a typo, even if it sits next to a whitelist term (peach->beach)
+    if (known_word && known_word(token)) {
+        return {token, token, 1.0f, 0};
+    }
+
+    // Allowed edit distance scales with length: 5-7 chars -> 1, 8+ chars -> 2
+    const int allowed_distance = std::min(max_edit_distance, token.length() >= 8 ? 2 : 1);
+
     std::string best_word = token;
     float best_confidence = 0.0f;
     int best_distance = 999;
@@ -149,7 +162,7 @@ CorrectionResult VantaProductionAnalyzer::correct_token(const std::string& token
     std::unordered_set<std::string> seen_candidates;
 
     // Tiered distance generation: Checks dist 1 first, only checks dist 2 if needed
-    for (int current_dist = 1; current_dist <= max_edit_distance; current_dist++) {
+    for (int current_dist = 1; current_dist <= allowed_distance; current_dist++) {
         auto deletes = get_deletes(token, current_dist);
 
         for (const auto& deleted_str : deletes) {
@@ -164,7 +177,7 @@ CorrectionResult VantaProductionAnalyzer::correct_token(const std::string& token
                 if (!seen_candidates.insert(candidate).second) continue;
 
                 int actual_distance = damerau_levenshtein(token, candidate);
-                if (actual_distance > max_edit_distance) continue;
+                if (actual_distance > allowed_distance) continue;
 
                 float confidence = calculate_confidence(actual_distance, freq);
                 bool better = false;
