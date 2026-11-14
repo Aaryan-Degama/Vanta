@@ -2,7 +2,7 @@
   "expo": {
     "name": "Vanta",
     "slug": "VantaApp",
-    "version": "1.0.0",
+    "version": "0.2.0-beta.1",
     "orientation": "portrait",
     "icon": "./assets/logo.png",
     "userInterfaceStyle": "light",
@@ -22,7 +22,8 @@
         "foregroundImage": "./assets/logo.png"
       },
       "predictiveBackGestureEnabled": false,
-      "package": "com.aaryan_ka.VantaApp"
+      "package": "com.aaryan_ka.VantaApp",
+      "versionCode": 2
     },
     "web": {
       "favicon": "./assets/favicon.png"
