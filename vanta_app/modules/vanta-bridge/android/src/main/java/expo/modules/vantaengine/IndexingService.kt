@@ -20,6 +20,32 @@ class IndexingService : Service() {
     private external fun setModelsDirNative(modelsDir: String)
     private external fun setCropsDirNative(cropsDir: String)
     private external fun generateEmbeddingsNative(dbPath: String): Boolean
+    private external fun getPendingDocumentsNative(dbPath: String): String
+    private external fun saveDocumentTextNative(dbPath: String, fileId: Long, name: String, body: String): Boolean
+    private external fun isPauseRequestedNative(): Boolean
+
+    /**
+     * Extracts and full-text indexes every pending document. Stops on a pause;
+     * the rest stay pending for the next run.
+     */
+    private fun indexDocuments(dbPath: String) {
+        while (true) {
+            val batch = org.json.JSONArray(getPendingDocumentsNative(dbPath))
+            if (batch.length() == 0) return
+            for (i in 0 until batch.length()) {
+                if (isPauseRequestedNative()) return
+                val doc = batch.getJSONObject(i)
+                val path = doc.getString("path")
+                // display_name, not the path: a hidden DATA column leaves a
+                // content:// URI as the path, whose last segment is the media id.
+                val name = doc.optString("display_name").ifEmpty { java.io.File(path).name }
+                // Indexed even with no text, so the file is still found by name.
+                // A failed save would return the same batch forever, so stop.
+                if (!saveDocumentTextNative(dbPath, doc.getLong("id"),
+                        name, extractDocumentText(path))) return
+            }
+        }
+    }
 
     private var indexingThread: Thread? = null
 
@@ -62,6 +88,13 @@ class IndexingService : Service() {
                         setModelsDirNative(modelsDir)
                         setCropsDirNative(cropsDir)
                         generateEmbeddingsNative(dbPath)
+                        // Documents need no models, so they run even when the
+                        // photo run failed. After the photo run, not before:
+                        // that run's first act is resetting the status the JS
+                        // poller watches.
+                        // ponytail: not shown in the progress UI; text
+                        // extraction is fast next to CLIP.
+                        indexDocuments(dbPath)
                     } catch (e: Exception) {
                         e.printStackTrace()
                     } finally {

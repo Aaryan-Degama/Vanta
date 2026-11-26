@@ -149,10 +149,6 @@ bool Face_embedding::is_loaded() {
     return d_loaded && e_loaded;
 }
 
-cv::Mat Face_embedding::load_img_seg(const std::string& PATH){
-    return cv::imread(PATH);
-}
-
 std::vector<FaceResult> Face_embedding::nms(std::vector<FaceResult>& proposals, float iou_threshold) {
     /*
     Non-Maximum Suppression (NMS) - Removes overlapping face detections and keeps only the most confident ones

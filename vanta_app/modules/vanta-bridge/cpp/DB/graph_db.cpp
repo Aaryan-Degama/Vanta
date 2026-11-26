@@ -4,7 +4,13 @@
 #include <ctime>
 #include <algorithm>
 #include <unordered_set>
+#include <cstdio>
+#include <filesystem>
+#include <system_error>
+#include <opencv2/imgcodecs.hpp>
+#include <opencv2/imgproc.hpp>
 #include "graph_db.hpp"
+#include "Config.hpp"
 
 #define LOG_TAG "VantaGraphDB"
 #define LOGE(...) __android_log_print(ANDROID_LOG_ERROR, LOG_TAG, __VA_ARGS__)
@@ -151,6 +157,56 @@ std::vector<EntityMeta> get_top_entities(sqlite3* db, int limit) {
     return results;
 }
 
+// Writes the face crop of one detection into the crops dir (once) and records it in
+// aligned_crop_path. Returns the crop path, or "" if it cannot be made (the UI then
+// crops abs_path by the bbox itself).
+static std::string make_face_crop(sqlite3* db, int64_t detection_id, const FaceCrop& crop) {
+    std::string crops_dir = VantaConfig::instance().crops_dir();
+    if (crops_dir.empty() || detection_id < 0 || crop.bbox_w <= 0 || crop.bbox_h <= 0) return "";
+
+    std::string path = crops_dir + "/face_" + std::to_string(detection_id) + ".jpg";
+    std::error_code ec;
+    if (!std::filesystem::exists(path, ec)) {
+        // Decoded the same way as at indexing (cv::imread applies EXIF rotation), so the bbox matches.
+        cv::Mat image = cv::imread(crop.abs_path);
+        if (image.empty()) {
+            LOGE("Failed to decode %s for face crop", crop.abs_path.c_str());
+            return "";
+        }
+        // Square around the face with a 25% margin on each side, clamped to the image.
+        int side = std::max(crop.bbox_w, crop.bbox_h) * 3 / 2;
+        cv::Rect roi(crop.bbox_x + crop.bbox_w / 2 - side / 2, crop.bbox_y + crop.bbox_h / 2 - side / 2, side, side);
+        roi &= cv::Rect(0, 0, image.cols, image.rows);
+        if (roi.empty()) return "";
+        cv::Mat face = image(roi);
+        if (face.cols > 320 || face.rows > 320) {
+            double scale = 320.0 / std::max(face.cols, face.rows);
+            cv::resize(face, face, cv::Size(), scale, scale, cv::INTER_AREA);
+        }
+        // Written under a temporary name and renamed, so an interrupted write never leaves a broken crop behind.
+        std::string tmp_path = crops_dir + "/face_" + std::to_string(detection_id) + ".tmp.jpg";
+        if (!cv::imwrite(tmp_path, face) || std::rename(tmp_path.c_str(), path.c_str()) != 0) {
+            LOGE("Failed to write face crop %s", path.c_str());
+            std::remove(tmp_path.c_str());
+            return "";
+        }
+    }
+
+    sqlite3_stmt* stmt = nullptr;
+    if (sqlite3_prepare_v2(db, "UPDATE face_detections SET aligned_crop_path = ? WHERE id = ?", -1, &stmt, nullptr) == SQLITE_OK) {
+        sqlite3_bind_text(stmt, 1, path.c_str(), -1, SQLITE_TRANSIENT);
+        sqlite3_bind_int64(stmt, 2, detection_id);
+        // Not fatal: the file exists, so the next call finds it and only retries this update.
+        if (sqlite3_step(stmt) != SQLITE_DONE) {
+            LOGE("Failed to store face crop path: %s", sqlite3_errmsg(db));
+        }
+        sqlite3_finalize(stmt);
+    } else {
+        LOGE("Failed to prepare face crop path update: %s", sqlite3_errmsg(db));
+    }
+    return path;
+}
+
 FaceCrop get_best_face_crop(sqlite3* db, int64_t entity_id) {
     FaceCrop crop;
     crop.file_id = -1;
@@ -163,9 +219,10 @@ FaceCrop get_best_face_crop(sqlite3* db, int64_t entity_id) {
     crop.det_score = 0.0f;
 
     sqlite3_stmt* stmt = nullptr;
-    const char* sql_quality = "SELECT fd.file_id, f.abs_path, fd.bbox_x, fd.bbox_y, fd.bbox_w, fd.bbox_h, fd.aligned_crop_path, fd.det_score FROM face_detections fd JOIN files f ON f.id = fd.file_id WHERE fd.entity_id = ? AND fd.det_score > 0.65 AND fd.bbox_w > 60 AND fd.bbox_h > 60 ORDER BY (fd.bbox_w * fd.bbox_h) DESC LIMIT 1";
+    const char* sql_quality = "SELECT fd.file_id, f.abs_path, fd.bbox_x, fd.bbox_y, fd.bbox_w, fd.bbox_h, fd.aligned_crop_path, fd.det_score, fd.id FROM face_detections fd JOIN files f ON f.id = fd.file_id WHERE fd.entity_id = ? AND fd.det_score > 0.65 AND fd.bbox_w > 60 AND fd.bbox_h > 60 ORDER BY (fd.bbox_w * fd.bbox_h) DESC LIMIT 1";
 
     bool found = false;
+    int64_t detection_id = -1;
 
     if (sqlite3_prepare_v2(db, sql_quality, -1, &stmt, nullptr) == SQLITE_OK) {
         sqlite3_bind_int64(stmt, 1, entity_id);
@@ -184,6 +241,7 @@ FaceCrop get_best_face_crop(sqlite3* db, int64_t entity_id) {
             crop.aligned_crop_path = crop_path ? crop_path : "";
             
             crop.det_score = static_cast<float>(sqlite3_column_double(stmt, 7));
+            detection_id = sqlite3_column_int64(stmt, 8);
             found = true;
         }
         sqlite3_finalize(stmt);
@@ -192,7 +250,7 @@ FaceCrop get_best_face_crop(sqlite3* db, int64_t entity_id) {
     }
 
     if (!found) {
-        const char* sql_fallback = "SELECT fd.file_id, f.abs_path, fd.bbox_x, fd.bbox_y, fd.bbox_w, fd.bbox_h, fd.aligned_crop_path, fd.det_score FROM face_detections fd JOIN files f ON f.id = fd.file_id WHERE fd.entity_id = ? ORDER BY (fd.bbox_w * fd.bbox_h) DESC LIMIT 1";
+        const char* sql_fallback = "SELECT fd.file_id, f.abs_path, fd.bbox_x, fd.bbox_y, fd.bbox_w, fd.bbox_h, fd.aligned_crop_path, fd.det_score, fd.id FROM face_detections fd JOIN files f ON f.id = fd.file_id WHERE fd.entity_id = ? ORDER BY (fd.bbox_w * fd.bbox_h) DESC LIMIT 1";
         
         if (sqlite3_prepare_v2(db, sql_fallback, -1, &stmt, nullptr) == SQLITE_OK) {
             sqlite3_bind_int64(stmt, 1, entity_id);
@@ -211,10 +269,23 @@ FaceCrop get_best_face_crop(sqlite3* db, int64_t entity_id) {
                 crop.aligned_crop_path = crop_path ? crop_path : "";
                 
                 crop.det_score = static_cast<float>(sqlite3_column_double(stmt, 7));
+                detection_id = sqlite3_column_int64(stmt, 8);
             }
             sqlite3_finalize(stmt);
         } else {
             LOGE("Failed to prepare get_best_face_crop fallback query: %s", sqlite3_errmsg(db));
+        }
+    }
+
+    // Crops are made on demand, so only the one shown per person is ever written.
+    // Crops written by older versions at index time are kept and used as they are.
+    std::error_code ec;
+    if (crop.file_id != -1 && (crop.aligned_crop_path.empty() || !std::filesystem::exists(crop.aligned_crop_path, ec))) {
+        try {
+            crop.aligned_crop_path = make_face_crop(db, detection_id, crop);
+        } catch (const std::exception& e) {
+            LOGE("Exception while making face crop: %s", e.what());
+            crop.aligned_crop_path = "";
         }
     }
 

@@ -21,6 +21,8 @@ import {
   getDatabaseStats,
   pauseEmbeddings,
   setSearchOptions,
+  hasAllFilesAccess,
+  requestAllFilesAccess,
 } from '../modules/vanta-bridge';
 import { formatBytes } from '../utils/formatting';
 import AsyncStorage from '@react-native-async-storage/async-storage';
@@ -274,6 +276,29 @@ export default function SettingsScreen() {
       } catch (err) {
         console.warn(err);
       }
+
+      // Documents (PDF, Word, ...) are invisible on Android 11+ without
+      // "All files access". Photos index either way, so only offer it.
+      try {
+        if (!(await hasAllFilesAccess())) {
+          await new Promise<void>((resolve) =>
+            Alert.alert(
+              'Index documents too?',
+              'To search inside PDFs and other documents, allow Vanta "All files access". Files never leave your phone. Documents are picked up on the next indexing run.',
+              [
+                { text: 'Not now', style: 'cancel', onPress: () => resolve() },
+                {
+                  text: 'Open settings',
+                  onPress: () => requestAllFilesAccess().finally(resolve),
+                },
+              ],
+              { cancelable: true, onDismiss: () => resolve() }
+            )
+          );
+        }
+      } catch (err) {
+        console.warn(err);
+      }
     }
 
     try {
@@ -479,20 +504,22 @@ export default function SettingsScreen() {
         />
       </View>
 
-      <TouchableOpacity 
-        style={[styles.settingRow, { marginTop: 10 }]} 
+      <TouchableOpacity
+        style={[styles.settingRow, { marginTop: 10 }]}
         onPress={() => navigation.navigate('AdvancedOption')}
       >
-        <Text style={[styles.settingText, { color: colors.text, fontWeight: 'bold' }]}>Advanced Options</Text>
+        <Text style={[styles.settingText, { color: colors.text, fontWeight: 'bold' }]}>
+          Advanced Options
+        </Text>
         <Ionicons name="chevron-forward" size={20} color={colors.iconColor} />
       </TouchableOpacity>
 
-      <TouchableOpacity 
-        style={[styles.settingRow, { marginTop: 10 }]} 
+      <TouchableOpacity
+        style={[styles.settingRow, { marginTop: 10 }]}
         onPress={() => {
           Alert.alert(
-            "Feature Help",
-            "• Graph Search: Extracts people and validates face relationships to improve search accuracy.\n\n• Spell Check: Automatically corrects typos in search queries.\n\n• Intent Extraction: Re-formats natural language sentences into visual descriptions optimized for the search model."
+            'Feature Help',
+            '• Graph Search: Extracts people and validates face relationships to improve search accuracy.\n\n• Spell Check: Automatically corrects typos in search queries.\n\n• Intent Extraction: Re-formats natural language sentences into visual descriptions optimized for the search model.'
           );
         }}
       >

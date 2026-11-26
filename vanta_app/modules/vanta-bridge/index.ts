@@ -75,9 +75,34 @@ export async function searchImages(query: string): Promise<string> {
 }
 
 /**
+ * Full-text searches indexed documents. Results are returned as a JSON string.
+ */
+export async function searchDocuments(query: string): Promise<string> {
+  return await VantaEngineModule.searchDocuments(query);
+}
+
+/**
+ * Whether documents are readable. Android 11+ needs "All files access" for them.
+ */
+export async function hasAllFilesAccess(): Promise<boolean> {
+  return await VantaEngineModule.hasAllFilesAccess();
+}
+
+/**
+ * Opens the system settings page where the user grants "All files access".
+ */
+export async function requestAllFilesAccess(): Promise<void> {
+  return await VantaEngineModule.requestAllFilesAccess();
+}
+
+/**
  * Sets global search options for the native C++ pipeline.
  */
-export async function setSearchOptions(useGraph: boolean, useSpellCheck: boolean, useIntent: boolean): Promise<void> {
+export async function setSearchOptions(
+  useGraph: boolean,
+  useSpellCheck: boolean,
+  useIntent: boolean
+): Promise<void> {
   return await VantaEngineModule.setSearchOptions(useGraph, useSpellCheck, useIntent);
 }
 

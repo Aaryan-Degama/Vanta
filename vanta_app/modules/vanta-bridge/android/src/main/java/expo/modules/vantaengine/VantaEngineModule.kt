@@ -120,6 +120,11 @@ class VantaEngineModule : Module() {
     private external fun searchImagesNative(dbPath: String, query: String): String
 
     /**
+     * Full-text search over indexed documents.
+     */
+    private external fun searchDocumentsNative(dbPath: String, query: String): String
+
+    /**
      * Sets search pipeline options in C++.
      */
     private external fun setSearchOptionsNative(useGraph: Boolean, useSpellCheck: Boolean, useIntent: Boolean)
@@ -354,6 +359,43 @@ class VantaEngineModule : Module() {
                     promise.reject("ERR", e.message, e)
                 }
             }.start()
+        }
+
+        AsyncFunction("searchDocuments") { query: String ->
+            val context = appContext.reactContext
+                ?: throw IllegalStateException("Android context unavailable")
+
+            val dbPath = VantaEngineConfig.getDatabasePath(context)
+            if (!java.io.File(dbPath).exists()) return@AsyncFunction "[]"
+
+            searchDocumentsNative(dbPath, query)
+        }
+
+        // Android 11+ hides non-media files (PDFs, docs) from MediaStore and
+        // the filesystem unless the user grants "All files access".
+        AsyncFunction("hasAllFilesAccess") {
+            android.os.Build.VERSION.SDK_INT < android.os.Build.VERSION_CODES.R ||
+                android.os.Environment.isExternalStorageManager()
+        }
+
+        // Opens the system page where the user can grant "All files access".
+        AsyncFunction("requestAllFilesAccess") {
+            val context = appContext.reactContext
+                ?: throw IllegalStateException("Android context unavailable")
+            if (android.os.Build.VERSION.SDK_INT < android.os.Build.VERSION_CODES.R) return@AsyncFunction null
+            val intent = Intent(
+                android.provider.Settings.ACTION_MANAGE_APP_ALL_FILES_ACCESS_PERMISSION,
+                Uri.parse("package:${context.packageName}")
+            ).addFlags(Intent.FLAG_ACTIVITY_NEW_TASK)
+            try {
+                context.startActivity(intent)
+            } catch (e: android.content.ActivityNotFoundException) {
+                // Some OEM builds lack the per-app page; fall back to the list.
+                context.startActivity(
+                    Intent(android.provider.Settings.ACTION_MANAGE_ALL_FILES_ACCESS_PERMISSION)
+                        .addFlags(Intent.FLAG_ACTIVITY_NEW_TASK)
+                )
+            }
         }
 
         AsyncFunction("getTopEntities") {

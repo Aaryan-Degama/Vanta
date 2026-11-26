@@ -19,11 +19,12 @@ class CLIP_instance{
 
     public:
     CLIP_instance(std::string& path);
-    CLIP_instance(cv::Mat& img);
+    CLIP_instance(const cv::Mat& img);  // an already decoded BGR image; it is not modified
 
     // void info(); // we need to implement it to get the information about the image lie the demension it shoudl be used like a Getter
 
     cv::Mat load_img (std::string &file_path) ;
+    cv::Mat preprocess (const cv::Mat& src);
     cv::Mat get_img() const;
 
 

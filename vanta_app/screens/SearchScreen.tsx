@@ -13,12 +13,13 @@ import {
   Keyboard,
   Pressable,
   BackHandler,
+  Alert,
 } from 'react-native';
 import { useTheme } from '../ThemeContext';
 import { useNavigation, NavigationProp } from '@react-navigation/native';
 import { Ionicons } from '@expo/vector-icons';
 import type { RootStackParamList } from '../App';
-import { searchImages } from '../modules/vanta-bridge';
+import { searchImages, searchDocuments, openFile } from '../modules/vanta-bridge';
 import { useVantaError } from '../hooks/useVantaError';
 import { MediaViewer, isVideo, share } from '../MediaViewer';
 
@@ -31,6 +32,13 @@ interface SearchResultItem {
   display_name?: string;
   size_bytes?: number;
   mtime_unix?: number;
+}
+
+/** A document matched by full-text search. */
+interface DocumentResultItem {
+  abs_path: string;
+  display_name?: string;
+  snippet?: string;
 }
 
 /**
@@ -156,6 +164,7 @@ export default function SearchScreen() {
   const navigation = useNavigation<NavigationProp<RootStackParamList>>();
   const [searchQuery, setSearchQuery] = useState('');
   const [results, setResults] = useState<SearchResultItem[]>([]);
+  const [docs, setDocs] = useState<DocumentResultItem[]>([]);
   const [isSearching, setIsSearching] = useState(false);
   // True once a search has completed, so an empty result set can be told apart
   // from the idle "not searched yet" state.
@@ -195,6 +204,7 @@ export default function SearchScreen() {
   };
 
   const handleError = useVantaError('Search failed');
+  const total = results.length + docs.length;
 
   const keyboardOffset = useRef(new Animated.Value(0)).current;
 
@@ -244,9 +254,15 @@ export default function SearchScreen() {
     clearSelection();
     setIsSearching(true);
     try {
-      const jsonRes = await searchImages(searchQuery);
+      // A failed document search must not hide the photo results.
+      const [jsonRes, docsRes] = await Promise.all([
+        searchImages(searchQuery),
+        searchDocuments(searchQuery).catch(() => '[]'),
+      ]);
       const parsedResults = JSON.parse(jsonRes);
+      const parsedDocs = JSON.parse(docsRes);
       setResults(Array.isArray(parsedResults) ? parsedResults : []);
+      setDocs(Array.isArray(parsedDocs) ? parsedDocs : []);
       setHasSearched(true);
     } catch (err) {
       // A failed search is not "no results"; fall back to the idle view.
@@ -263,7 +279,7 @@ export default function SearchScreen() {
         style={[styles.header, { position: 'absolute', top: 50, left: 20, right: 20, zIndex: 10 }]}
       >
         <View style={{ width: 90, alignItems: 'flex-start' }}>
-          {(results.length > 0 || isSearching || hasSearched) && (
+          {(total > 0 || isSearching || hasSearched) && (
             <TouchableOpacity
               accessibilityLabel={selecting ? 'Cancel selection' : 'Clear search'}
               style={[styles.iconButton, { backgroundColor: 'rgba(0,0,0,0.6)' }]}
@@ -271,6 +287,7 @@ export default function SearchScreen() {
                 if (selecting) return clearSelection();
                 setSearchQuery('');
                 setResults([]);
+                setDocs([]);
                 setHasSearched(false);
               }}
             >
@@ -280,11 +297,7 @@ export default function SearchScreen() {
         </View>
 
         <Text style={{ color: '#ffffff', fontSize: 20, fontWeight: 'bold' }}>
-          {selecting
-            ? `${selected.size} selected`
-            : results.length > 0
-              ? `${results.length} Results`
-              : 'Search'}
+          {selecting ? `${selected.size} selected` : total > 0 ? `${total} Results` : 'Search'}
         </Text>
 
         <View style={{ width: 90, flexDirection: 'row', justifyContent: 'flex-end' }}>
@@ -328,7 +341,7 @@ export default function SearchScreen() {
       >
         {/* Search Results List */}
         <View style={{ flex: 1 }}>
-          {results.length === 0 && !isSearching ? (
+          {total === 0 && !isSearching ? (
             <View
               style={{
                 flex: 1,
@@ -348,26 +361,62 @@ export default function SearchScreen() {
               </Text>
               <Text style={{ color: '#8e8e93', fontSize: 14, marginTop: 8 }}>
                 {hasSearched
-                  ? 'No photos matched your search. Try different words.'
+                  ? 'Nothing matched your search. Try different words.'
                   : 'Results will appear here in a grid'}
               </Text>
             </View>
           ) : (
-            <View style={{ flexDirection: 'row', flexWrap: 'wrap' }}>
-              {results.map((item, index) => (
-                <StaggeredResultItem
-                  key={index}
-                  item={item}
-                  index={index}
-                  colors={colors}
-                  selected={selected.has(item.abs_path)}
-                  onPress={() =>
-                    selecting ? toggleSelected(item.abs_path) : setViewerIndex(index)
-                  }
-                  onLongPress={() => toggleSelected(item.abs_path)}
-                />
-              ))}
-            </View>
+            <>
+              {/* First child of the inverted scroll view, so it sits nearest the search bar. */}
+              {docs.length > 0 && (
+                <View
+                  style={{ transform: [{ scaleY: -1 }], paddingHorizontal: 8, paddingBottom: 8 }}
+                >
+                  {docs.map((doc, i) => (
+                    <Pressable
+                      key={doc.abs_path}
+                      testID={`doc-${i}`}
+                      style={[styles.docRow, { backgroundColor: colors.chipBackground }]}
+                      onPress={async () => {
+                        if (!(await openFile(doc.abs_path))) {
+                          Alert.alert(
+                            'Cannot open file',
+                            'No installed app can open this document.'
+                          );
+                        }
+                      }}
+                    >
+                      <Ionicons name="document-text-outline" size={26} color={colors.text} />
+                      <View style={{ flex: 1, marginLeft: 10 }}>
+                        <Text numberOfLines={1} style={{ color: colors.text, fontWeight: '600' }}>
+                          {doc.display_name || doc.abs_path.split('/').pop()}
+                        </Text>
+                        {!!doc.snippet && (
+                          <Text numberOfLines={2} style={{ color: '#8e8e93', fontSize: 12 }}>
+                            {doc.snippet}
+                          </Text>
+                        )}
+                      </View>
+                    </Pressable>
+                  ))}
+                </View>
+              )}
+              <View style={{ flexDirection: 'row', flexWrap: 'wrap' }}>
+                {results.map((item, index) => (
+                  <StaggeredResultItem
+                    key={index}
+                    item={item}
+                    index={index}
+                    colors={colors}
+                    selected={selected.has(item.abs_path)}
+                    onPress={() =>
+                      selecting ? toggleSelected(item.abs_path) : setViewerIndex(index)
+                    }
+                    onLongPress={() => toggleSelected(item.abs_path)}
+                  />
+                ))}
+              </View>
+            </>
           )}
 
           {isSearching && (
@@ -473,6 +522,13 @@ const styles = StyleSheet.create({
   },
   searchIcon: {
     marginRight: 10,
+  },
+  docRow: {
+    flexDirection: 'row',
+    alignItems: 'center',
+    borderRadius: 12,
+    padding: 10,
+    marginTop: 6,
   },
   cellBadgeLeft: { position: 'absolute', left: 4, bottom: 4 },
   cellBadgeRight: { position: 'absolute', right: 4, top: 4 },

@@ -189,7 +189,8 @@ bool save_clip_embedding(sqlite3* db, int64_t file_id, const std::vector<float>&
 bool update_file_status(sqlite3* db, int64_t file_id, const std::string& status)
 {
     sqlite3_stmt* stmt = nullptr;
-    const char* sql = "UPDATE files SET status = ? WHERE id = ?;";
+    // Each 'failed' mark counts an attempt; insert_files retries failed photos a few times.
+    const char* sql = "UPDATE files SET status = ?1, retry_count = retry_count + (?1 = 'failed') WHERE id = ?2;";
     if (sqlite3_prepare_v2(db, sql, -1, &stmt, nullptr) != SQLITE_OK)
     {
         LOGE("Prepare failed for update_file_status: %s", sqlite3_errmsg(db));

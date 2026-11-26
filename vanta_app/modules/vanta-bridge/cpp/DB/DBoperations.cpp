@@ -1,4 +1,11 @@
 #include "DBoperations.hpp"
+#include "json_utils.hpp"
+#include "clip_db.hpp"
+#include "graph_db.hpp"
+#include <cctype>
+#include <cstdio>
+#include <unordered_map>
+#include <unordered_set>
 #include <iostream>
 #include <android/log.h>
 #define SQLITE_CORE 1
@@ -40,6 +47,9 @@ CREATE INDEX IF NOT EXISTS idx_files_filetype ON files(filetype);
 CREATE INDEX IF NOT EXISTS idx_files_mtime    ON files(mtime_unix);
 CREATE INDEX IF NOT EXISTS idx_files_status     ON files(status);
 CREATE INDEX IF NOT EXISTS idx_files_face_count ON files(face_count);
+
+-- Full-text index for documents; rowid = files.id.
+CREATE VIRTUAL TABLE IF NOT EXISTS doc_fts USING fts5(name, body, tokenize='unicode61 remove_diacritics 2');
 )";
 
     sqlite3_auto_extension((void (*)())sqlite3_vec_init);
@@ -114,25 +124,165 @@ bool insert_file(sqlite3* db, const file_meta& file)
     return success;
 }
 
+// Prepares `sql`, binds `id` to ?1, steps once.
+static bool exec_with_id(sqlite3* db, const char* sql, int64_t id)
+{
+    sqlite3_stmt* stmt = nullptr;
+    bool ok = sqlite3_prepare_v2(db, sql, -1, &stmt, nullptr) == SQLITE_OK;
+    if (ok) {
+        sqlite3_bind_int64(stmt, 1, id);
+        ok = sqlite3_step(stmt) == SQLITE_DONE;
+    }
+    if (!ok) LOGE("'%s' failed for file %lld: %s", sql, (long long)id, sqlite3_errmsg(db));
+    sqlite3_finalize(stmt);
+    return ok;
+}
+
+// Removes everything derived from one file (embeddings, faces, document text,
+// graph links). Virtual tables don't cascade, so each is cleared explicitly.
+// Crop files are collected, not deleted, so a rollback leaves them intact.
+static bool purge_file_index(sqlite3* db, int64_t file_id, std::vector<std::string>& crop_paths)
+{
+    sqlite3_stmt* stmt = nullptr;
+    if (sqlite3_prepare_v2(db, "SELECT id, aligned_crop_path FROM face_detections WHERE file_id = ?;",
+                           -1, &stmt, nullptr) != SQLITE_OK) {
+        LOGE("purge: select detections failed: %s", sqlite3_errmsg(db));
+        return false;
+    }
+    sqlite3_bind_int64(stmt, 1, file_id);
+    std::vector<int64_t> detection_ids;
+    int rc;
+    while ((rc = sqlite3_step(stmt)) == SQLITE_ROW) {
+        detection_ids.push_back(sqlite3_column_int64(stmt, 0));
+        const char* crop = reinterpret_cast<const char*>(sqlite3_column_text(stmt, 1));
+        if (crop && *crop) crop_paths.emplace_back(crop);
+    }
+    sqlite3_finalize(stmt);
+    if (rc != SQLITE_DONE) {
+        LOGE("purge: reading detections failed: %s", sqlite3_errmsg(db));
+        return false;
+    }
+
+    for (int64_t det_id : detection_ids) {
+        if (!exec_with_id(db, "DELETE FROM face_vec WHERE detection_id = ?1;", det_id)) return false;
+    }
+    return exec_with_id(db, "DELETE FROM clip_vec WHERE file_id = ?1;", file_id)
+        && exec_with_id(db, "DELETE FROM doc_fts WHERE rowid = ?1;", file_id)
+        && exec_with_id(db, "DELETE FROM face_detections WHERE file_id = ?1;", file_id)
+        && exec_with_id(db, "DELETE FROM entity_memberships WHERE file_id = ?1;", file_id)
+        && exec_with_id(db, "DELETE FROM entity_relation_files WHERE file_id = ?1;", file_id);
+}
+
+// Reconciles the files table with a complete scan: new paths are inserted,
+// changed ones (mtime/size) are purged and reset to 'pending', and vanished
+// ones are purged and removed. All in one transaction; any failure rolls back.
 bool insert_files(const std::vector<file_meta>& files, const std::string& db_path)
 {
     sqlite3* db = initialize_database(db_path);
     if (!db) return false;
+    init_clip_db(db);  // clip_vec is purged below and may not exist yet
 
-    char* err_msg = nullptr;
-    sqlite3_exec(db, "BEGIN TRANSACTION;", nullptr, nullptr, &err_msg);
+    struct existing_row { int64_t id; std::string filetype; int64_t size; int64_t mtime; };
+    std::unordered_map<std::string, existing_row> existing;
+    std::unordered_set<std::string> seen, scanned_types;
+    std::vector<std::string> crop_paths;
+    int inserted = 0, updated = 0, removed = 0;
+    bool ok = sqlite3_exec(db, "BEGIN IMMEDIATE;", nullptr, nullptr, nullptr) == SQLITE_OK;
 
-    int success_count = 0;
-    for (const auto& file : files)
-    {
-        if (insert_file(db, file)) success_count++;
+    sqlite3_stmt* stmt = nullptr;
+    if (ok && sqlite3_prepare_v2(db, "SELECT id, abs_path, filetype, size_bytes, mtime_unix FROM files;",
+                                 -1, &stmt, nullptr) == SQLITE_OK) {
+        int rc;
+        while ((rc = sqlite3_step(stmt)) == SQLITE_ROW) {
+            const char* path = reinterpret_cast<const char*>(sqlite3_column_text(stmt, 1));
+            const char* type = reinterpret_cast<const char*>(sqlite3_column_text(stmt, 2));
+            existing[path ? path : ""] = {sqlite3_column_int64(stmt, 0), type ? type : "",
+                                         sqlite3_column_int64(stmt, 3), sqlite3_column_int64(stmt, 4)};
+        }
+        ok = rc == SQLITE_DONE;
+    } else ok = false;
+    sqlite3_finalize(stmt); stmt = nullptr;
+
+    if (ok && sqlite3_prepare_v2(db, R"(
+            UPDATE files SET size_bytes = ?, mtime_unix = ?, display_name = ?, mime_type = ?,
+                width_px = ?, height_px = ?, duration_ms = ?, status = 'pending', retry_count = 0,
+                face_count = 0, last_indexed_at = 0
+            WHERE id = ?;
+        )", -1, &stmt, nullptr) != SQLITE_OK) ok = false;
+
+    for (size_t i = 0; ok && i < files.size(); ++i) {
+        const file_meta& file = files[i];
+        if (!seen.insert(file.content_uri).second) continue;  // duplicate path in scan
+        scanned_types.insert(file.file_type);
+
+        auto it = existing.find(file.content_uri);
+        if (it == existing.end()) {
+            ok = insert_file(db, file);
+            if (ok) inserted++;
+            continue;
+        }
+        if (it->second.mtime == file.mtime_unix && it->second.size == file.size_bytes) continue;
+
+        ok = purge_file_index(db, it->second.id, crop_paths);
+        if (!ok) break;
+        sqlite3_reset(stmt);
+        sqlite3_bind_int64(stmt, 1, file.size_bytes);
+        sqlite3_bind_int64(stmt, 2, file.mtime_unix);
+        sqlite3_bind_text(stmt, 3, file.display_name.c_str(), -1, SQLITE_TRANSIENT);
+        sqlite3_bind_text(stmt, 4, file.mime_type.c_str(), -1, SQLITE_TRANSIENT);
+        sqlite3_bind_int(stmt, 5, file.width_px);
+        sqlite3_bind_int(stmt, 6, file.height_px);
+        sqlite3_bind_int64(stmt, 7, file.duration_ms);
+        sqlite3_bind_int64(stmt, 8, it->second.id);
+        ok = sqlite3_step(stmt) == SQLITE_DONE;
+        if (ok) updated++;
+    }
+    sqlite3_finalize(stmt);
+
+    // Only remove rows of a type this scan actually returned: a revoked
+    // permission or a null MediaStore cursor must not wipe that type's index
+    // (and the user's named people with it).
+    if (!files.empty()) {
+        for (const auto& [path, row] : existing) {
+            if (!ok) break;
+            if (seen.count(path) || !scanned_types.count(row.filetype)) continue;
+            ok = purge_file_index(db, row.id, crop_paths)
+                && exec_with_id(db, "DELETE FROM files WHERE id = ?1;", row.id);
+            if (ok) removed++;
+        }
     }
 
-    sqlite3_exec(db, "COMMIT;", nullptr, nullptr, &err_msg);
-    LOGI("Batch insert complete. Success: %d/%zu", success_count, files.size());
+    // A photo can fail for a transient reason (e.g. the temp-file I/O error of
+    // builds before SQLITE_TEMP_STORE=3); give it a few more tries. It holds no
+    // derived rows: its per-photo transaction was rolled back.
+    int retried = 0;
+    if (ok) {
+        ok = sqlite3_exec(db,
+                "UPDATE files SET status = 'pending' WHERE status = 'failed' AND retry_count < 3;",
+                nullptr, nullptr, nullptr) == SQLITE_OK;
+        retried = sqlite3_changes(db);
+    }
+
+    if (ok && (updated || removed)) {
+        ok = sqlite3_exec(db,
+                "UPDATE entities SET sample_count = "
+                "(SELECT COUNT(*) FROM face_detections fd WHERE fd.entity_id = entities.entity_id);",
+                nullptr, nullptr, nullptr) == SQLITE_OK
+            && rebuild_graph(db);
+    }
+
+    ok = ok && sqlite3_exec(db, "COMMIT;", nullptr, nullptr, nullptr) == SQLITE_OK;
+    if (!ok) {
+        LOGE("insert_files failed, rolling back: %s", sqlite3_errmsg(db));
+        sqlite3_exec(db, "ROLLBACK;", nullptr, nullptr, nullptr);
+    } else {
+        for (const std::string& p : crop_paths) std::remove(p.c_str());
+        LOGI("Index reconciled: %d new, %d changed, %d removed, %d failed retried (scan %zu)",
+             inserted, updated, removed, retried, files.size());
+    }
 
     sqlite3_close(db);
-    return true;
+    return ok;
 }
 
 std::vector<file_meta> get_files(const std::string& db_path, int limit)
@@ -299,4 +449,144 @@ std::string get_database_stats_json(const std::string& db_path)
     sqlite3_close(db);
 
     return json;
+}
+
+std::string get_pending_documents_json(const std::string& db_path, int limit)
+{
+    std::string json = "[";
+    sqlite3* db = nullptr;
+    sqlite3_stmt* stmt = nullptr;
+    if (sqlite3_open_v2(db_path.c_str(), &db, SQLITE_OPEN_READONLY, nullptr) == SQLITE_OK &&
+        sqlite3_prepare_v2(db,
+            "SELECT id, abs_path, display_name FROM files WHERE filetype = 'document' AND status = 'pending' LIMIT ?;",
+            -1, &stmt, nullptr) == SQLITE_OK)
+    {
+        sqlite3_bind_int(stmt, 1, limit);
+        bool first = true;
+        while (sqlite3_step(stmt) == SQLITE_ROW)
+        {
+            const char* path = reinterpret_cast<const char*>(sqlite3_column_text(stmt, 1));
+            const char* name = reinterpret_cast<const char*>(sqlite3_column_text(stmt, 2));
+            if (!first) json += ",";
+            first = false;
+            json += "{" + json_number_field("id", sqlite3_column_int64(stmt, 0)) + "," +
+                    json_string_field("path", path ? path : "") + "," +
+                    json_string_field("display_name", name ? name : "") + "}";
+        }
+    }
+    sqlite3_finalize(stmt);
+    sqlite3_close(db);
+    return json + "]";
+}
+
+bool save_document_text(const std::string& db_path, int64_t file_id,
+                        const std::string& name, const std::string& body)
+{
+    // Schema already exists (insert_files ran initialize_database during the scan).
+    sqlite3* db = nullptr;
+    if (sqlite3_open_v2(db_path.c_str(), &db, SQLITE_OPEN_READWRITE, nullptr) != SQLITE_OK) {
+        LOGE("Failed to open DB for save_document_text: %s", sqlite3_errmsg(db));
+        if (db) sqlite3_close(db);
+        return false;
+    }
+    sqlite3_busy_timeout(db, 5000);
+    sqlite3_exec(db, "PRAGMA foreign_keys = ON;", nullptr, nullptr, nullptr);
+
+    bool ok = sqlite3_exec(db, "BEGIN IMMEDIATE;", nullptr, nullptr, nullptr) == SQLITE_OK;
+    sqlite3_stmt* stmt = nullptr;
+    if (ok && sqlite3_prepare_v2(db, "DELETE FROM doc_fts WHERE rowid = ?;", -1, &stmt, nullptr) == SQLITE_OK) {
+        sqlite3_bind_int64(stmt, 1, file_id);
+        ok = sqlite3_step(stmt) == SQLITE_DONE;
+    } else ok = false;
+    sqlite3_finalize(stmt); stmt = nullptr;
+
+    if (ok && sqlite3_prepare_v2(db, "INSERT INTO doc_fts(rowid, name, body) VALUES (?, ?, ?);", -1, &stmt, nullptr) == SQLITE_OK) {
+        sqlite3_bind_int64(stmt, 1, file_id);
+        sqlite3_bind_text(stmt, 2, name.c_str(), -1, SQLITE_TRANSIENT);
+        sqlite3_bind_text(stmt, 3, body.c_str(), -1, SQLITE_TRANSIENT);
+        ok = sqlite3_step(stmt) == SQLITE_DONE;
+    } else ok = false;
+    sqlite3_finalize(stmt); stmt = nullptr;
+
+    if (ok && sqlite3_prepare_v2(db,
+            "UPDATE files SET status = 'indexed', last_indexed_at = strftime('%s','now') WHERE id = ?;",
+            -1, &stmt, nullptr) == SQLITE_OK) {
+        sqlite3_bind_int64(stmt, 1, file_id);
+        ok = sqlite3_step(stmt) == SQLITE_DONE;
+    } else ok = false;
+    sqlite3_finalize(stmt);
+
+    ok = ok && sqlite3_exec(db, "COMMIT;", nullptr, nullptr, nullptr) == SQLITE_OK;
+    if (!ok) {
+        LOGE("save_document_text failed for %lld: %s", (long long)file_id, sqlite3_errmsg(db));
+        sqlite3_exec(db, "ROLLBACK;", nullptr, nullptr, nullptr);
+    }
+    sqlite3_close(db);
+    return ok;
+}
+
+std::string fts_query_from_words(const std::string& raw)
+{
+    // Each word becomes a quoted prefix term ("word"*), ANDed together, so
+    // user input can never be parsed as FTS5 syntax (AND/OR/NEAR, column:...).
+    std::string out, word;
+    auto flush = [&]() {
+        if (word.empty()) return;
+        if (!out.empty()) out += " ";
+        out += "\"" + word + "\"*";
+        word.clear();
+    };
+    for (unsigned char c : raw) {
+        if (c >= 0x80 || std::isalnum(c)) word += static_cast<char>(c);
+        else flush();
+    }
+    flush();
+    return out;
+}
+
+std::string search_documents_json(const std::string& db_path, const std::string& query, int limit)
+{
+    std::string match = fts_query_from_words(query);
+    if (match.empty()) return "[]";
+
+    std::string json = "[";
+    sqlite3* db = nullptr;
+    sqlite3_stmt* stmt = nullptr;
+    if (sqlite3_open_v2(db_path.c_str(), &db, SQLITE_OPEN_READONLY, nullptr) == SQLITE_OK &&
+        sqlite3_prepare_v2(db, R"(
+            SELECT f.id, f.abs_path, f.display_name, f.size_bytes, f.mtime_unix,
+                   snippet(doc_fts, 1, '', '', '…', 16)
+            FROM doc_fts JOIN files f ON f.id = doc_fts.rowid
+            WHERE doc_fts MATCH ?
+            ORDER BY bm25(doc_fts, 5.0, 1.0)
+            LIMIT ?;
+        )", -1, &stmt, nullptr) == SQLITE_OK)
+    {
+        sqlite3_bind_text(stmt, 1, match.c_str(), -1, SQLITE_TRANSIENT);
+        sqlite3_bind_int(stmt, 2, limit);
+        bool first = true;
+        while (sqlite3_step(stmt) == SQLITE_ROW)
+        {
+            auto text = [&](int i) {
+                const char* t = reinterpret_cast<const char*>(sqlite3_column_text(stmt, i));
+                return std::string(t ? t : "");
+            };
+            if (!first) json += ",";
+            first = false;
+            json += "{" +
+                json_number_field("file_id", sqlite3_column_int64(stmt, 0)) + "," +
+                json_string_field("abs_path", text(1)) + "," +
+                json_string_field("display_name", text(2)) + "," +
+                json_number_field("size_bytes", sqlite3_column_int64(stmt, 3)) + "," +
+                json_number_field("mtime_unix", sqlite3_column_int64(stmt, 4)) + "," +
+                json_string_field("snippet", text(5)) + "}";
+        }
+    }
+    else if (db)
+    {
+        LOGE("search_documents_json failed: %s", sqlite3_errmsg(db));
+    }
+    sqlite3_finalize(stmt);
+    sqlite3_close(db);
+    return json + "]";
 }

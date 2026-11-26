@@ -64,4 +64,27 @@ describe('SearchScreen', () => {
     // A successful share leaves selection mode.
     expect(await result.findByText('2 Results')).toBeTruthy();
   });
+
+  it('lists matching documents and opens one on tap', async () => {
+    jest.spyOn(bridge, 'searchImages').mockResolvedValueOnce('[]');
+    (bridge.searchDocuments as jest.Mock).mockResolvedValueOnce(
+      JSON.stringify([
+        { abs_path: '/docs/invoice.pdf', display_name: 'invoice.pdf', snippet: 'total due 4,200' },
+      ])
+    );
+    const result = await render(
+      <ThemeProvider>
+        <SearchScreen />
+      </ThemeProvider>
+    );
+    const input = result.getByPlaceholderText('<Query>');
+    await fireEvent.changeText(input, 'invoice');
+    await fireEvent(input, 'submitEditing');
+
+    expect(await result.findByText('invoice.pdf')).toBeTruthy();
+    expect(result.getByText('total due 4,200')).toBeTruthy();
+    expect(result.getByText('1 Results')).toBeTruthy();
+    await fireEvent.press(result.getByTestId('doc-0'));
+    expect(bridge.openFile).toHaveBeenCalledWith('/docs/invoice.pdf');
+  });
 });

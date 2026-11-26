@@ -6,13 +6,19 @@ CLIP_instance::CLIP_instance (std::string &path) {
     image = load_img(path);
 }
 
-CLIP_instance::CLIP_instance ( cv::Mat& img ) {
-    CLIP_instance::image = img; 
+CLIP_instance::CLIP_instance ( const cv::Mat& img ) {
+    preprocess(img);
 }
 
 cv::Mat CLIP_instance::load_img(std::string& path){
     img_path = path;
-    image = cv::imread(img_path);
+    return preprocess(cv::imread(img_path));
+}
+
+// `src` is a decoded BGR image (as cv::imread returns it). It is only read: the crop below is a
+// view and cv::resize writes a new buffer, so the caller can pass the same Mat to the face pipeline.
+cv::Mat CLIP_instance::preprocess(const cv::Mat& src){
+    image = src;
 
     if(image.empty()){
         return image;

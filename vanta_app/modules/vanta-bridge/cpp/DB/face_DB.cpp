@@ -207,6 +207,11 @@ bool compute_faces(const std::string& abs_path, int64_t file_id, Face_embedding&
     }
 
     cv::Mat image = cv::imdecode(cv::Mat(1, buf.size(), CV_8UC1, buf.data()), cv::IMREAD_COLOR);
+    return compute_faces(image, abs_path, file_id, face_model, out);
+}
+
+bool compute_faces(const cv::Mat& image, const std::string& abs_path, int64_t /*file_id*/, Face_embedding& face_model, std::vector<ComputedFace>& out) {
+    out.clear();
     if (image.empty()) {
         LOGE("Failed to decode image: %s", abs_path.c_str());
         return false;
@@ -220,30 +225,15 @@ bool compute_faces(const std::string& abs_path, int64_t file_id, Face_embedding&
 
     for (size_t i = 0; i < faces.size(); ++i) {
         // A detection without an embedding can never be clustered and would stay pending forever,
-        // so nothing (crop, detection row) is stored for such a face.
+        // so no detection row is stored for such a face.
         if (i >= embeddings.size() || embeddings[i].empty()) {
             LOGE("No embedding for face %zu in %s; face skipped", i, abs_path.c_str());
             continue;
         }
 
-        std::string crop_path = "";
-        try {
-            cv::Mat aligned = face_model.align_face(image, faces[i], 320);
-            if (!aligned.empty()) {
-                std::string target_path = VantaConfig::instance().crop_path(
-                    std::to_string(file_id) + "_" + std::to_string(i) + ".jpg");
-                if (cv::imwrite(target_path, aligned)) {
-                    crop_path = target_path;
-                } else {
-                    LOGE("cv::imwrite failed for crop %s", target_path.c_str());
-                }
-            }
-        } catch(const std::exception& e) {
-            LOGE("Exception during align_face or imwrite: %s", e.what());
-        }
-
+        // No crop is written here: get_best_face_crop makes the one avatar per person on demand.
         faces[i].embedding = std::move(embeddings[i]);
-        out.push_back({std::move(faces[i]), crop_path});
+        out.push_back({std::move(faces[i])});
     }
     return true;
 }
@@ -251,9 +241,9 @@ bool compute_faces(const std::string& abs_path, int64_t file_id, Face_embedding&
 void store_faces(sqlite3* db, int64_t file_id, const std::vector<ComputedFace>& faces) {
     int stored = 0;  // faces saved with both a detection row and an embedding
     for (size_t i = 0; i < faces.size(); ++i) {
-        const std::string& crop_path = faces[i].crop_path;
         int64_t detection_id = 0;
-        if (!save_face_detection(db, file_id, faces[i].face, crop_path, &detection_id)) {
+        // No crop yet; get_best_face_crop fills aligned_crop_path when the avatar is first shown.
+        if (!save_face_detection(db, file_id, faces[i].face, "", &detection_id)) {
             LOGE("save_face_detection failed for face %zu of file %lld", i, (long long)file_id);
             continue;
         }
@@ -263,7 +253,6 @@ void store_faces(sqlite3* db, int64_t file_id, const std::vector<ComputedFace>& 
             // A detection without an embedding would stay pending forever, so it is not kept.
             std::string del_sql = "DELETE FROM face_detections WHERE id = " + std::to_string(detection_id);
             sqlite3_exec(db, del_sql.c_str(), nullptr, nullptr, nullptr);
-            if (!crop_path.empty()) std::remove(crop_path.c_str());
             continue;
         }
         ++stored;

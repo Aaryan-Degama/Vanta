@@ -37,6 +37,15 @@ declare class VantaEngineModule extends NativeModule<Record<string, never>> {
   // Searches indexed images with a natural-language query.
   searchImages(query: string): Promise<string>;
 
+  // Full-text search over indexed documents; JSON array string.
+  searchDocuments(query: string): Promise<string>;
+
+  // Whether non-media files (documents) are readable (Android 11+ "All files access").
+  hasAllFilesAccess(): Promise<boolean>;
+
+  // Opens the system page for granting "All files access".
+  requestAllFilesAccess(): Promise<void>;
+
   // Sets global search options (Graph Search, Spell Check, Intent Extraction).
   setSearchOptions(useGraph: boolean, useSpellCheck: boolean, useIntent: boolean): Promise<void>;
 

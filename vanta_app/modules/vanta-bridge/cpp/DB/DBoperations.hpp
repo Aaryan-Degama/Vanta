@@ -51,3 +51,19 @@ int get_file_count(
 std::string get_database_stats_json(
     const std::string& db_path
 );
+
+// ── Documents (full-text search over extracted text) ──
+
+// Up to `limit` pending documents as a JSON array of {id, path, display_name}.
+std::string get_pending_documents_json(const std::string& db_path, int limit = 50);
+
+// Replaces the document's full-text row and marks the file indexed.
+bool save_document_text(const std::string& db_path, int64_t file_id,
+                        const std::string& name, const std::string& body);
+
+// Turns free text into a safe FTS5 query: every word a quoted prefix term, ANDed.
+std::string fts_query_from_words(const std::string& raw);
+
+// Best-matching documents as a JSON array (file_id, abs_path, display_name,
+// size_bytes, mtime_unix, snippet).
+std::string search_documents_json(const std::string& db_path, const std::string& query, int limit = 30);

@@ -98,7 +98,6 @@ public:
     bool unload();
     bool is_loaded();
 
-    cv::Mat load_img_seg(const std::string& PATH);
     std::vector<FaceResult> get_faces(const cv::Mat& image);
     // Both return an EMPTY Mat if the face cannot be aligned (not exactly 5
     // keypoints, or a degenerate fit).

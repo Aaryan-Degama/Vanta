@@ -13,8 +13,8 @@ Vanta is a React Native Android application that indexes your local media using 
 - **Relational Graph** — Understands *"my mom"*, *"my dad"*, *"my brother"* by linking named entities to relationship metadata.
 - **On-Device Everything** — All models run locally via ONNX Runtime. No network required. No data leaves your phone.
 - **Semantic Image Search** — CLIP embeddings understand visual concepts beyond just tags.
-- **Document Indexing** — PDFs, Word docs, and text files are chunked and embedded for full-text semantic search.
-- **Blazing Fast Performance** — Average end-to-end search latency of ~280ms across all query combinations (long/short, entity/relation, intent builder, and spell-checking), with rare peaks of ~430ms-450ms.
+- **Document Search** — Keyword search inside text/Markdown/CSV, Word/PowerPoint/Excel (`.docx`/`.pptx`/`.xlsx`), OpenDocument and RTF files, plus PDFs on Android 15+ (SQLite FTS5). Android 11+ needs "All files access" for documents.
+- **Lightweight Query Parsing** — Query NER uses a 2-layer BERT-tiny model, small enough to run on every search. (No benchmark harness exists in the repo yet, so no latency figures are claimed.)
 
 ---
 
@@ -36,7 +36,7 @@ Vanta is a React Native Android application that indexes your local media using 
 | **Native Bridge** | Expo Modules API + JNI (C++) |
 | **ML Inference** | ONNX Runtime (C++) |
 | **Vision Models** | CLIP-ViT-B/32 (image + text), ArcFace `buffalo_l` (face det + recognition) |
-| **NLP** | DistilBERT NER (custom-trained for photo queries) |
+| **NLP** | BERT-tiny NER (2-layer, ~4.4M params, custom-trained for photo queries) |
 | **Database** | SQLite + sqlite-vec (vector search extension) |
 | **Build** | Android NDK, CMake, Gradle |
 

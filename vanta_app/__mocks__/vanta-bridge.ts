@@ -79,6 +79,13 @@ export async function searchImages(query: string): Promise<string> {
   ]);
 }
 
+/** No documents by default; tests override with mockResolvedValueOnce. */
+export const searchDocuments = jest.fn(async (_query: string): Promise<string> => '[]');
+
+export const hasAllFilesAccess = jest.fn(async (): Promise<boolean> => true);
+
+export const requestAllFilesAccess = jest.fn(async (): Promise<void> => {});
+
 /**
  * Records the search options pushed to the engine so tests can assert on them.
  */

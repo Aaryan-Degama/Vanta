@@ -75,6 +75,11 @@ add_library(vanta SHARED
 
 # Preprocessor definitions used by feature-specific headers.
 target_compile_definitions(vanta PRIVATE
+    SQLITE_ENABLE_FTS5
+    # Keep statement journals and temp tables in memory: SQLite's unix VFS looks
+    # for a temp dir in TMPDIR, /var/tmp, /usr/tmp, /tmp, none of them writable by
+    # an Android app, so a spill to a temp file fails with "disk I/O error".
+    SQLITE_TEMP_STORE=3
     CLIP_DIR="${CMAKE_CURRENT_SOURCE_DIR}/Include/Preprocessing/CLIP"
     SEGREGATION_DIR="${CMAKE_CURRENT_SOURCE_DIR}/Include/Preprocessing/Segregation"
 )

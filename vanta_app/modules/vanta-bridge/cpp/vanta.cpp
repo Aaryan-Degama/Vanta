@@ -492,10 +492,14 @@ Java_expo_modules_vantaengine_VantaEngineModule_generateEmbeddingsNative(
                     // All models (CLIP, face detection and embedding) run before
                     // the write lock is taken, so the transaction below only
                     // writes; this also gives other writers a turn between two photos.
-                    CLIP_instance clip_img(path);
+                    // Decoded once for both pipelines; neither modifies it (each works on
+                    // resized copies). An unreadable photo is empty here, and get_embedding
+                    // throws on it, so the photo is marked failed below.
+                    cv::Mat decoded = cv::imread(path);
+                    CLIP_instance clip_img(decoded);
                     std::vector<float> embedding = g_clip_session->get_embedding(clip_img);
                     std::vector<ComputedFace> faces;
-                    bool faces_read = compute_faces(path, img_meta.id, *g_face_session, faces);
+                    bool faces_read = compute_faces(decoded, path, img_meta.id, *g_face_session, faces);
 
                     if (sqlite3_exec(db, "BEGIN IMMEDIATE;", nullptr, nullptr, nullptr) != SQLITE_OK) {
                         // Nothing was written; the photo stays pending and is retried.
@@ -543,10 +547,8 @@ Java_expo_modules_vantaengine_VantaEngineModule_generateEmbeddingsNative(
 
                 // The rollback comes first so that the 'failed' mark is a
                 // statement of its own and is not undone with the photo's rows.
-                // ponytail: face crops written for a photo that then fails stay
-                // on disk unreferenced (a failed photo is never retried); they are small
-                // and the next face re-scan clears the directory. Delete them
-                // here if failed photos ever become common.
+                // The mark bumps retry_count; insert_files sets the photo back to
+                // pending on the next scans until it has failed 3 times.
                 if (in_transaction) sqlite3_exec(db, "ROLLBACK;", nullptr, nullptr, nullptr);
                 if (update_file_status(db, img_meta.id, "failed")) progressed = true;
             }
@@ -815,11 +817,13 @@ Java_expo_modules_vantaengine_VantaEngineModule_getBestFaceCropNative(
     env->ReleaseStringUTFChars(dbPath, db_path_cstr);
 
     sqlite3* db = nullptr;
-    if (sqlite3_open_v2(db_path.c_str(), &db, SQLITE_OPEN_READONLY, nullptr) != SQLITE_OK) {
+    // Read-write: get_best_face_crop stores the path of a crop it makes on demand.
+    if (sqlite3_open_v2(db_path.c_str(), &db, SQLITE_OPEN_READWRITE, nullptr) != SQLITE_OK) {
         LOGE("Failed to open DB for getBestFaceCropNative: %s", sqlite3_errmsg(db));
         if (db) sqlite3_close(db);
         return env->NewStringUTF("{}");
     }
+    sqlite3_busy_timeout(db, 5000);
 
     FaceCrop crop = get_best_face_crop(db, static_cast<int64_t>(entityId));
 
@@ -1242,4 +1246,44 @@ Java_expo_modules_vantaengine_VantaEngineModule_resetFaceDataNative(
     // Closing the connection rolls back a transaction that was left open.
     if (db) sqlite3_close(db);
     return JNI_FALSE;
+}
+
+// ── Documents ──
+
+static std::string jstring_to_std(JNIEnv* env, jstring s) {
+    if (s == nullptr) return "";
+    const char* c = env->GetStringUTFChars(s, nullptr);
+    if (c == nullptr) return "";
+    std::string out(c);
+    env->ReleaseStringUTFChars(s, c);
+    return out;
+}
+
+extern "C" JNIEXPORT jstring JNICALL
+Java_expo_modules_vantaengine_IndexingService_getPendingDocumentsNative(
+    JNIEnv* env, jobject /* this */, jstring dbPath) {
+    return env->NewStringUTF(get_pending_documents_json(jstring_to_std(env, dbPath)).c_str());
+}
+
+extern "C" JNIEXPORT jboolean JNICALL
+Java_expo_modules_vantaengine_IndexingService_saveDocumentTextNative(
+    JNIEnv* env, jobject /* this */, jstring dbPath, jlong fileId, jstring name, jstring body) {
+    return save_document_text(jstring_to_std(env, dbPath), fileId,
+                              jstring_to_std(env, name), jstring_to_std(env, body))
+        ? JNI_TRUE : JNI_FALSE;
+}
+
+// Lets document indexing honour the same pause as the photo loop; the flag is
+// cleared at the start of each generateEmbeddingsNative run.
+extern "C" JNIEXPORT jboolean JNICALL
+Java_expo_modules_vantaengine_IndexingService_isPauseRequestedNative(
+    JNIEnv* env, jobject /* this */) {
+    return g_pause_embedding.load() ? JNI_TRUE : JNI_FALSE;
+}
+
+extern "C" JNIEXPORT jstring JNICALL
+Java_expo_modules_vantaengine_VantaEngineModule_searchDocumentsNative(
+    JNIEnv* env, jobject /* this */, jstring dbPath, jstring query) {
+    return env->NewStringUTF(
+        search_documents_json(jstring_to_std(env, dbPath), jstring_to_std(env, query)).c_str());
 }
